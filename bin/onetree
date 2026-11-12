@@ -91,7 +91,7 @@ set -eo pipefail
 #   dispatch                the subcommand table at the bottom
 
 # ---- settings and helpers every command uses
-VERSION=1.0.0
+VERSION=1.1.0
 [[ -n "${ONETREE_TIMING:-}" && -z "${ONETREE_T0:-}" ]] && { ONETREE_T0=$(perl -MTime::HiRes=time -e 'print time' 2>/dev/null || date +%s); export ONETREE_T0; }   # ONETREE_TIMING=1: phase timings on stderr
 CFG=${ONETREE_CONFIG:-$HOME/.config/onetree/config}
 EVENTS=${ONETREE_EVENTS:-$HOME/.local/state/onetree/events.jsonl}   # append-only record of what onetree did or refused (docs/snapshot.md)

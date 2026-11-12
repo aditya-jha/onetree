@@ -12,6 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: shellcheck -S warning bin/onetree tests/run.sh
+      - run: shellcheck install.sh   # POSIX sh, every severity
 
   tests:
     strategy:

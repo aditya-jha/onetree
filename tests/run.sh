@@ -1489,6 +1489,19 @@ cp rel-src/bin/onetree "$TMP/brew/Cellar/onetree/1.9.0/libexec/bin/"; ut "$TMP/b
 eq "update (Homebrew install, source under the brew prefix): changes nothing, prints the brew command, exits 0" \
   "$(ut "$UH/.local/bin/onetree" update; echo "exit $?")" "onetree: installed with Homebrew; update with: brew upgrade onetree && $TMP/brew/bin/onetree install"$'\n'"exit 0"
 
+# ---- install.sh, under sh: the newest release into ONETREE_HOME, then install; a rerun updates in place; anything else there is refused
+IH=$TMP/ihome; ID=$IH/.local/share/onetree; mkdir -p "$IH"
+it() { HOME=$IH ONETREE_CONFIG=$IH/config ONETREE_BREW_PREFIX=$TMP/brew ONETREE_REPO=$TMP/rel.git PATH="$UB:$PATH" sh "$(dirname "$ONETREE")/../install.sh"; }
+it >/dev/null 2>&1 || true
+eq "install.sh: clones the newest release into ~/.local/share/onetree, detached at its tag, and installs it" "$(git -C "$ID" describe --tags) $(git -C "$ID" symbolic-ref -q HEAD || echo detached) $(HOME=$IH "$IH/.local/bin/onetree" version)" "v1.10.0 detached onetree 1.10.0"
+sed "s/^VERSION=.*/VERSION=1.12.0/" "$ONETREE" > rel-src/bin/onetree; ( cd rel-src && git commit -qam 1.12.0 && git tag v1.12.0 && git push -q origin HEAD:main --tags )
+{ echo mine > "$ID/notes.txt"; } 2>/dev/null || true; it >/dev/null 2>&1 || true
+eq "install.sh: a rerun moves the same checkout to the new release and reinstalls, keeping an untracked file, one rc line, one source" \
+  "$(git -C "$ID" describe --tags) $(HOME=$IH "$IH/.local/bin/onetree" version) $(cat "$ID/notes.txt") $(grep -c onetree-agents "$IH/.zshrc") $(git config -f "$IH/config" --get-all onetree.source)" "v1.12.0 onetree 1.12.0 mine 1 $ID"
+git init -q occupied; ( cd occupied && echo keep > data && git add data && git commit -qm mine && git tag v9.9.9 && git remote add origin "$TMP/occupied" ); h0=$(git -C occupied symbolic-ref HEAD)   # another project's checkout, with a release-like tag
+eq "install.sh: an ONETREE_HOME holding anything but an onetree checkout (here another project's) is refused and left as it was" \
+  "$(ONETREE_HOME=$TMP/occupied it >/dev/null 2>&1; echo "exit $?") $(git -C occupied symbolic-ref -q HEAD || echo detached) $(git -C occupied status --porcelain | wc -l | tr -d ' ')" "exit 1 $h0 0"
+
 V=$(sed -n 's/^VERSION=//p' "$ONETREE"); v=${V//./\\.}; R=$(dirname "$ONETREE")/..   # VERSION is the one source; the rest must agree with it
 has "version: onetree version, --version, ui/package.json and the newest released CHANGELOG heading (## X.Y.Z (YYYY-MM-DD)) all give VERSION" \
   "$($ONETREE version) / $($ONETREE --version) / $(jq -r .version "$R/ui/package.json") / $(grep -m1 -E '^## [0-9]' "$R/CHANGELOG.md")" \

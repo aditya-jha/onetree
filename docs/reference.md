@@ -25,7 +25,15 @@ Settings resolve in this order, first hit wins:
 
 `onetree repos` lists the registered repos; `onetree info [repo]` prints the
 effective settings for one and `--json` says which layer each came from.
-`onetree version` (or `--version`) prints `onetree 1.0.0`.
+`onetree version` (or `--version`) prints `onetree 1.0.0`, plus `(dev <short sha>)`
+when run from a git clone that is not at a release tag.
+
+`onetree update` follows releases, by what the source it was installed from is:
+- **a release install**, detached at a `vX.Y.Z` tag (as `install.sh` leaves it): fetches
+  tags, checks out the newest `vX.Y.Z` by version order (never a pre-release), reinstalls;
+- **a contributor clone**, on a branch: fast-forwards that branch, reinstalls;
+- **a Homebrew install**, under `$(brew --prefix)`: changes nothing and prints
+  `brew upgrade onetree && $(brew --prefix)/bin/onetree install`.
 
 | Key | Default | Meaning |
 |---|---|---|

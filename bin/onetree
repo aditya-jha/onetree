@@ -2697,7 +2697,17 @@ cmd_uninstall() {
 cmd_update() {
   local src; src=$(gcfg onetree.source) || die "no onetree.source in $CFG: run install from a git checkout of onetree"
   [[ -x "$src/bin/onetree" ]] || die "$src/bin/onetree missing"
-  git -C "$src" pull -q --ff-only && "$src/bin/onetree" install
+  local bp=${ONETREE_BREW_PREFIX:-} tag
+  [[ -n "$bp" ]] || ! command -v brew >/dev/null || bp=$(brew --prefix)
+  if [[ -n "$bp" && "$(real "$src")/" == "$(real "$bp")/"* ]]; then   # brew's own onetree, not the stale copy in ~/.local/bin, must reinstall
+    echo "onetree: installed with Homebrew; update with: brew upgrade onetree && $bp/bin/onetree install"; return 0; fi
+  if git -C "$src" symbolic-ref -q HEAD >/dev/null; then git -C "$src" pull -q --ff-only   # a contributor clone: its branch
+  else   # a release install, detached at a tag: the newest vX.Y.Z by version order, never a pre-release
+    git -C "$src" fetch -q --tags origin || die "update: fetching tags into $src failed"
+    tag=$(git -C "$src" tag -l --sort=-v:refname 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true); tag=${tag%%$'\n'*}
+    [[ -n "$tag" ]] || die "update: no vX.Y.Z tag in $src"
+    git -C "$src" -c advice.detachedHead=false checkout -q "$tag"
+  fi && "$src/bin/onetree" install
 }
 # ---- doctor: checks that install worked and still holds
 cmd_doctor() {
@@ -3663,7 +3673,8 @@ cmd_guard() {
 # `<cmd> --help` is never an argument
 case "${1:-}/${2:-}" in -h/*|--help/*|help/*|*/-h|*/--help) sed -n '2,/^set -/p' "$0" | grep '^#'; exit 0 ;; esac
 case "${1:-}" in
-  version|--version) echo "onetree $VERSION" ;;
+  version|--version) d=$(dirname "$(dirname "$(realfile "$0")")")   # a contributor clone off a tag says which commit it runs
+    if [[ -e "$d/.git" ]] && ! git -C "$d" describe --exact-match --tags --match 'v*' >/dev/null 2>&1; then echo "onetree $VERSION (dev $(git -C "$d" rev-parse --short HEAD))"; else echo "onetree $VERSION"; fi ;;
   new) shift; cmd_new "$@" ;;
   carry) shift; cmd_carry "$@" ;;
   ls)  shift; cmd_ls "$@" ;;

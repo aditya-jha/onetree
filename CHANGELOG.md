@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Docs: the README installs with `install.sh` first and the clone second, with
+  one update line for each. `RELEASING.md` is the release procedure, written
+  as commands with a check after each. `AGENTS.md` (loaded by `CLAUDE.md`) holds
+  the rules for changes, and `CONTRIBUTING.md` points to it.
+
 - `install.sh`: `curl -fsSL https://raw.githubusercontent.com/aditya-jha/onetree/main/install.sh | bash`
   clones the newest release into `${ONETREE_HOME:-~/.local/share/onetree}` and
   runs `onetree install`; rerunning it updates in place. It refuses a folder that

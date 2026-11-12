@@ -25,11 +25,27 @@ Requirements: macOS or Linux (with cron), bash 3.2+, git 2.31+, `jq` 1.6+,
 `gh` logged in, `lsof`, `perl`. Node 22.6+ only for the optional dashboard.
 
 ```
-git clone https://github.com/aditya-jha/onetree.git ~/src/onetree
-~/src/onetree/bin/onetree install
+curl -fsSL https://raw.githubusercontent.com/aditya-jha/onetree/main/install.sh | bash
 exec $SHELL -l       # load the shell wrappers; install says if ~/.local/bin is not on PATH
 onetree doctor
 ```
+
+`install.sh` clones the newest release into `~/.local/share/onetree` (set
+`ONETREE_HOME` to change it) and runs `onetree install`. To work on onetree
+itself, clone it instead:
+
+```
+git clone https://github.com/aditya-jha/onetree.git ~/src/onetree
+~/src/onetree/bin/onetree install
+exec $SHELL -l
+onetree doctor
+```
+
+To update:
+- **install.sh:** `onetree update` moves to the newest release, and so does
+  rerunning `install.sh`. On 1.0.0, rerun `install.sh`: its `update` still
+  pulls `main`.
+- **clone:** `onetree update` fast-forwards your branch and reinstalls.
 
 Install your agents first: `install` sets up only the ones it finds, and you
 run it again after adding one. An agent can run `install` and `doctor` for you.

@@ -1467,7 +1467,11 @@ else
   printf 'skip  generated zsh wrappers: zsh is unavailable\n'
 fi
 
-eq "version prints the release, as --version does" "$($ONETREE version) / $($ONETREE --version)" "onetree 1.0.0 / onetree 1.0.0"
+V=$(sed -n 's/^VERSION=//p' "$ONETREE"); v=${V//./\\.}; R=$(dirname "$ONETREE")/..   # VERSION is the one source; the rest must agree with it
+has "version: onetree version, --version, ui/package.json and the newest released CHANGELOG heading (## X.Y.Z (YYYY-MM-DD)) all give VERSION" \
+  "$($ONETREE version) / $($ONETREE --version) / $(jq -r .version "$R/ui/package.json") / $(grep -m1 -E '^## [0-9]' "$R/CHANGELOG.md")" \
+  "^onetree $v / onetree $v / $v / ## $v \([0-9]{4}-[0-9]{2}-[0-9]{2}\)$"
+
 REF=$(dirname "$ONETREE")/../docs/reference.md   # every subcommand in the dispatch and every config key onetree reads is documented
 cmds=$(sed -n '/^case "${1:-}" in$/,/^esac/p' "$ONETREE" | grep -oE '^  [a-z][a-z|-]*\)' | tr -d ' )' | tr '|' '\n')
 keys=$(grep -oE '\b(cfg|cfg_find_clone) [a-z][A-Za-z]+' "$ONETREE" | cut -d' ' -f2 | grep -vxE 'lookup|onetree' | sort -u)

@@ -1467,10 +1467,32 @@ else
   printf 'skip  generated zsh wrappers: zsh is unavailable\n'
 fi
 
+# ---- update follows releases: an origin with releases v1.9.0 and v1.10.0 (version order, not text order), a pre-release, and an unreleased commit on main
+UH=$TMP/uhome; UB=$TMP/ubin; mkdir -p "$UH" "$UB"
+printf '%s\n' '#!/bin/sh' 'echo Linux' > "$UB/uname"; printf '%s\n' '#!/bin/sh' '[ "$1" = -l ] || cat >/dev/null' > "$UB/crontab"; chmod +x "$UB/uname" "$UB/crontab"
+ut() { HOME=$UH ONETREE_CONFIG=$UH/config ONETREE_BREW_PREFIX=$TMP/brew PATH="$UB:$PATH" "$@"; }   # install's side effects stay in UH; no real brew
+git init -q --bare rel.git; git clone -q rel.git rel-src 2>/dev/null; mkdir -p rel-src/bin "$TMP/brew/Cellar/onetree/1.9.0/libexec/bin"
+for v in 1.9.0 1.10.0 1.11.0-rc.1 1.11.0-dev; do
+  sed "s/^VERSION=.*/VERSION=$v/" "$ONETREE" > rel-src/bin/onetree; chmod +x rel-src/bin/onetree
+  ( cd rel-src && git add -A && git commit -qm "$v" && { [[ $v == *-dev ]] || git tag "v$v"; } )
+done
+( cd rel-src && git push -q origin HEAD:main --tags ); git -C rel.git symbolic-ref HEAD refs/heads/main
+git clone -q rel.git rel-install 2>/dev/null; git -C rel-install -c advice.detachedHead=false checkout -q v1.9.0
+ut rel-install/bin/onetree install >/dev/null; ut "$UH/.local/bin/onetree" update >/dev/null 2>&1 || true
+eq "update (release install): checks out the newest vX.Y.Z tag, skipping pre-releases, and reinstalls it" "$(git -C rel-install describe --tags) $(ut "$UH/.local/bin/onetree" version)" "v1.10.0 onetree 1.10.0"
+git clone -q rel.git rel-dev 2>/dev/null; git -C rel-dev reset -q --hard v1.9.0
+ut rel-dev/bin/onetree install >/dev/null; ut "$UH/.local/bin/onetree" update >/dev/null 2>&1 || true
+eq "update (contributor clone): fast-forwards its branch, unreleased commits too, and reinstalls" "$(git -C rel-dev symbolic-ref --short HEAD) $(ut "$UH/.local/bin/onetree" version)" "main onetree 1.11.0-dev"
+eq "version: a clone off a tag adds (dev <short sha>); a clone at a tag and the installed copy do not" \
+  "$(rel-dev/bin/onetree version) / $(rel-install/bin/onetree version) / $(ut "$UH/.local/bin/onetree" version)" "onetree 1.11.0-dev (dev $(git -C rel-dev rev-parse --short HEAD)) / onetree 1.10.0 / onetree 1.11.0-dev"
+cp rel-src/bin/onetree "$TMP/brew/Cellar/onetree/1.9.0/libexec/bin/"; ut "$TMP/brew/Cellar/onetree/1.9.0/libexec/bin/onetree" install >/dev/null
+eq "update (Homebrew install, source under the brew prefix): changes nothing, prints the brew command, exits 0" \
+  "$(ut "$UH/.local/bin/onetree" update; echo "exit $?")" "onetree: installed with Homebrew; update with: brew upgrade onetree && $TMP/brew/bin/onetree install"$'\n'"exit 0"
+
 V=$(sed -n 's/^VERSION=//p' "$ONETREE"); v=${V//./\\.}; R=$(dirname "$ONETREE")/..   # VERSION is the one source; the rest must agree with it
 has "version: onetree version, --version, ui/package.json and the newest released CHANGELOG heading (## X.Y.Z (YYYY-MM-DD)) all give VERSION" \
   "$($ONETREE version) / $($ONETREE --version) / $(jq -r .version "$R/ui/package.json") / $(grep -m1 -E '^## [0-9]' "$R/CHANGELOG.md")" \
-  "^onetree $v / onetree $v / $v / ## $v \([0-9]{4}-[0-9]{2}-[0-9]{2}\)$"
+  "^onetree $v( \(dev [0-9a-f]+\))? / onetree $v( \(dev [0-9a-f]+\))? / $v / ## $v \([0-9]{4}-[0-9]{2}-[0-9]{2}\)$"
 
 REF=$(dirname "$ONETREE")/../docs/reference.md   # every subcommand in the dispatch and every config key onetree reads is documented
 cmds=$(sed -n '/^case "${1:-}" in$/,/^esac/p' "$ONETREE" | grep -oE '^  [a-z][a-z|-]*\)' | tr -d ' )' | tr '|' '\n')

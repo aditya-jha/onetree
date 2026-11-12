@@ -1,0 +1,54 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: shellcheck -S warning bin/onetree tests/run.sh
+
+  tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: install zsh
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y zsh
+      - name: tool versions
+        run: |
+          bash --version | head -1
+          zsh --version
+          git --version
+          jq --version
+          gh --version | head -1
+          command -v lsof
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: end-to-end tests
+        run: bash tests/run.sh
+
+  ui:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - run: npm ci
+      - name: typecheck, build, test, committed dist matches src
+        run: npm run verify

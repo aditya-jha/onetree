@@ -1,0 +1,54 @@
+@import "tailwindcss";
+
+/*
+ * Tokens. Roles, not raw colours, in components: ground / raised / paper /
+ * selected / hairline / control / ink / body / muted / accent, plus positive,
+ * caution and critical with a tint each. Light only, system fonts, so the
+ * page needs no network and looks native on the machine it inspects.
+ */
+@theme {
+  --color-ground: #ffffff;
+  --color-raised: #f7f7f5;
+  --color-paper: #ffffff;
+  --color-selected: #efeeea;
+  --color-hairline: #e3e2dd;
+  --color-control: #8a8883;
+  --color-ink: #141413;
+  --color-body: #3f3e3b;
+  --color-muted: #6b6965;
+  --color-accent: #141413;
+  --color-accent-tint: #ece9e0;
+  --color-positive: #2f6b45;
+  --color-positive-tint: #e6f0e9;
+  --color-caution: #8a5a12;
+  --color-caution-tint: #f6ecd8;
+  --color-critical: #a3362b;
+  --color-critical-tint: #f7e3e0;
+
+  --font-sans: -apple-system, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  --radius-edge: 3px;
+}
+
+html,
+body {
+  min-height: 100%;
+}
+
+body {
+  background: var(--color-ground);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: var(--color-accent-tint);
+}

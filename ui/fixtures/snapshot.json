@@ -1,0 +1,1571 @@
+{
+  "schema": 1,
+  "generatedAt": "2026-09-21T05:34:35Z",
+  "host": "mac.local",
+  "onetree": {
+    "bin": "/Users/you/.local/bin/onetree"
+  },
+  "repos": [
+    {
+      "info": {
+        "repo": "shop-web",
+        "main": "/Users/you/Documents/shop/shop-web",
+        "registered": true,
+        "guard": true,
+        "integration": "main",
+        "root": "/Users/you/Documents/shop/.worktrees",
+        "worktreeDir": "/Users/you/Documents/shop/.worktrees/shop-web",
+        "branchPrefix": "feature/",
+        "copy": [
+          ".env",
+          ".env.local"
+        ],
+        "keep": [],
+        "keepSource": "/Users/you/Documents/shop/shop-web",
+        "bootstrap": null,
+        "stale": 24,
+        "committedFile": false,
+        "sources": {
+          "guard": "local",
+          "integration": "remote-head",
+          "root": "local",
+          "branchPrefix": "default",
+          "copy": "default",
+          "keep": "default",
+          "keepSource": "default",
+          "bootstrap": "default",
+          "stale": "default"
+        },
+        "remotes": {
+          "base": {
+            "name": "origin",
+            "source": "default",
+            "slug": "you/shop-web"
+          },
+          "push": {
+            "name": "origin",
+            "source": "default",
+            "slug": "you/shop-web"
+          },
+          "ghUser": {
+            "login": null,
+            "source": "default"
+          },
+          "ignoredFromFile": []
+        },
+        "writable": {
+          "paths": [],
+          "source": "default"
+        }
+      },
+      "main": {
+        "path": "/Users/you/Documents/shop/shop-web",
+        "repo": "shop-web",
+        "main": "/Users/you/Documents/shop/shop-web",
+        "kind": "main",
+        "slug": null,
+        "branch": "main",
+        "detached": false,
+        "head": "b474890ecc062057b2838c5f458e43d8d4092eb9",
+        "dirty": 0,
+        "unpushed": null,
+        "pr": null,
+        "lock": null,
+        "live": 8,
+        "guard": true,
+        "integration": "main",
+        "behind": 0,
+        "park": {
+          "action": "none",
+          "code": "on-integration",
+          "reason": "on main"
+        }
+      },
+      "worktrees": [
+        {
+          "path": "/Users/you/Documents/shop/.worktrees/shop-web/claude-260917-162554",
+          "repo": "shop-web",
+          "main": "/Users/you/Documents/shop/shop-web",
+          "kind": "worktree",
+          "slug": "claude-260917-162554",
+          "branch": "feature/claude-260917-162554",
+          "detached": false,
+          "head": "eca94ea84b03bfda6e87c58d69b9e056ef3771ec",
+          "dirty": 0,
+          "unpushed": 0,
+          "pr": {
+            "state": "NONE",
+            "head": null
+          },
+          "lock": null,
+          "live": 4,
+          "gc": {
+            "action": "keep",
+            "code": "live",
+            "reason": "4 live process(es) inside"
+          }
+        },
+        {
+          "path": "/Users/you/Documents/shop/.worktrees/shop-web/pi-260917-160353",
+          "repo": "shop-web",
+          "main": "/Users/you/Documents/shop/shop-web",
+          "kind": "worktree",
+          "slug": "pi-260917-160353",
+          "branch": "feature/avatar-cache-plan",
+          "detached": false,
+          "head": "23a52e84816ef5899a1619b2cd92dbe4c4c197df",
+          "dirty": 0,
+          "unpushed": 0,
+          "pr": {
+            "state": "MERGED",
+            "head": "23a52e84816ef5899a1619b2cd92dbe4c4c197df"
+          },
+          "lock": null,
+          "live": 1,
+          "gc": {
+            "action": "keep",
+            "code": "live",
+            "reason": "1 live process(es) inside"
+          }
+        },
+        {
+          "path": "/Users/you/Documents/shop/.worktrees/shop-web/plan-hygiene-landed",
+          "repo": "shop-web",
+          "main": "/Users/you/Documents/shop/shop-web",
+          "kind": "worktree",
+          "slug": "plan-hygiene-landed",
+          "branch": "feature/plan-hygiene-landed",
+          "detached": false,
+          "head": "72d0bdf9de0a79ec87f38d1212c42d22343b37b1",
+          "dirty": 0,
+          "unpushed": 0,
+          "pr": {
+            "state": "OPEN",
+            "head": "72d0bdf9de0a79ec87f38d1212c42d22343b37b1"
+          },
+          "lock": null,
+          "live": 0,
+          "gc": {
+            "action": "keep",
+            "code": "pr-open",
+            "reason": "PR open (feature/plan-hygiene-landed)"
+          }
+        },
+        {
+          "path": "/Users/you/Documents/shop/.worktrees/shop-web/rail-scroll-restore",
+          "repo": "shop-web",
+          "main": "/Users/you/Documents/shop/shop-web",
+          "kind": "worktree",
+          "slug": "rail-scroll-restore",
+          "branch": "feature/rail-scroll-restore",
+          "detached": false,
+          "head": "32d19213abca2f197cf68fb451ee88fac12a43eb",
+          "dirty": 0,
+          "unpushed": 0,
+          "pr": {
+            "state": "MERGED",
+            "head": "32d19213abca2f197cf68fb451ee88fac12a43eb"
+          },
+          "lock": null,
+          "live": 1,
+          "gc": {
+            "action": "keep",
+            "code": "live",
+            "reason": "1 live process(es) inside"
+          }
+        }
+      ]
+    },
+    {
+      "info": {
+        "repo": "shop-deploy",
+        "main": "/Users/you/Documents/shop/shop-deploy",
+        "registered": true,
+        "guard": true,
+        "integration": "main",
+        "root": "/Users/you/Documents/shop/.worktrees",
+        "worktreeDir": "/Users/you/Documents/shop/.worktrees/shop-deploy",
+        "branchPrefix": "feature/",
+        "copy": [
+          ".env",
+          ".env.local"
+        ],
+        "keep": [
+          "inventory.private.yaml",
+          "releases/production.env"
+        ],
+        "keepSource": "/Users/you/Documents/shop/.private/shop-deploy",
+        "bootstrap": null,
+        "stale": 24,
+        "committedFile": false,
+        "sources": {
+          "guard": "local",
+          "integration": "remote-head",
+          "root": "local",
+          "branchPrefix": "default",
+          "copy": "default",
+          "keep": "local",
+          "keepSource": "local",
+          "bootstrap": "default",
+          "stale": "default"
+        },
+        "remotes": {
+          "base": {
+            "name": "origin",
+            "source": "default",
+            "slug": "you/shop-deploy"
+          },
+          "push": {
+            "name": "origin",
+            "source": "default",
+            "slug": "you/shop-deploy"
+          },
+          "ghUser": {
+            "login": null,
+            "source": "default"
+          },
+          "ignoredFromFile": []
+        },
+        "writable": {
+          "paths": [],
+          "source": "default"
+        }
+      },
+      "main": {
+        "path": "/Users/you/Documents/shop/shop-deploy",
+        "repo": "shop-deploy",
+        "main": "/Users/you/Documents/shop/shop-deploy",
+        "kind": "main",
+        "slug": null,
+        "branch": "main",
+        "detached": false,
+        "head": "468ebc324932bb6cf9852b45346607551835dcc1",
+        "dirty": 0,
+        "unpushed": null,
+        "pr": null,
+        "lock": null,
+        "live": 0,
+        "guard": true,
+        "integration": "main",
+        "behind": 0,
+        "park": {
+          "action": "none",
+          "code": "on-integration",
+          "reason": "on main"
+        }
+      },
+      "worktrees": [
+        {
+          "path": "/Users/you/Documents/shop/.worktrees/shop-deploy/sync-gap-investigation",
+          "repo": "shop-deploy",
+          "main": "/Users/you/Documents/shop/shop-deploy",
+          "kind": "worktree",
+          "slug": "sync-gap-investigation",
+          "branch": "feature/sync-gap-investigation",
+          "detached": false,
+          "head": "2c4fa1a6d46745174f844bb96a3b869ef73423c0",
+          "dirty": 0,
+          "unpushed": 0,
+          "pr": {
+            "state": "NONE",
+            "head": null
+          },
+          "lock": null,
+          "live": 0,
+          "gc": {
+            "action": "keep",
+            "code": "keep-file",
+            "reason": "inventory.private.yaml differs from /Users/you/Documents/shop/.private/shop-deploy/inventory.private.yaml"
+          }
+        },
+        {
+          "path": "/Users/you/Documents/shop/.worktrees/shop-deploy/ship-scroll-restore",
+          "repo": "shop-deploy",
+          "main": "/Users/you/Documents/shop/shop-deploy",
+          "kind": "worktree",
+          "slug": "ship-scroll-restore",
+          "branch": "feature/ship-scroll-restore",
+          "detached": false,
+          "head": "d2dff330f7696328c9baf9a2fd8b84535928871c",
+          "dirty": 1,
+          "unpushed": 0,
+          "pr": {
+            "state": "NONE",
+            "head": null
+          },
+          "lock": null,
+          "live": 0,
+          "gc": {
+            "action": "keep",
+            "code": "dirty",
+            "reason": "1 uncommitted path(s)"
+          }
+        }
+      ]
+    },
+    {
+      "info": {
+        "repo": "shop-agent",
+        "main": "/Users/you/Documents/shop/shop-agent",
+        "registered": true,
+        "guard": true,
+        "integration": "development",
+        "root": "/Users/you/Documents/shop/.worktrees",
+        "worktreeDir": "/Users/you/Documents/shop/.worktrees/shop-agent",
+        "branchPrefix": "feature/",
+        "copy": [
+          ".env",
+          ".env.local"
+        ],
+        "keep": [],
+        "keepSource": "/Users/you/Documents/shop/shop-agent",
+        "bootstrap": null,
+        "stale": 24,
+        "committedFile": false,
+        "sources": {
+          "guard": "local",
+          "integration": "local",
+          "root": "local",
+          "branchPrefix": "default",
+          "copy": "default",
+          "keep": "default",
+          "keepSource": "default",
+          "bootstrap": "default",
+          "stale": "default"
+        },
+        "remotes": {
+          "base": {
+            "name": "upstream",
+            "source": "upstream-convention",
+            "slug": "Shop-Co/shop-agent"
+          },
+          "push": {
+            "name": "origin",
+            "source": "default",
+            "slug": "you_shop/shop-agent"
+          },
+          "ghUser": {
+            "login": "you_shop",
+            "source": "local"
+          },
+          "ignoredFromFile": []
+        },
+        "writable": {
+          "paths": [
+            ".env",
+            ".claude/standup/"
+          ],
+          "source": "local"
+        }
+      },
+      "main": {
+        "path": "/Users/you/Documents/shop/shop-agent",
+        "repo": "shop-agent",
+        "main": "/Users/you/Documents/shop/shop-agent",
+        "kind": "main",
+        "slug": null,
+        "branch": "development",
+        "detached": false,
+        "head": "2a41717d3ea71048e7f383ace3eb3b8cc95468e4",
+        "dirty": 0,
+        "unpushed": null,
+        "pr": null,
+        "lock": null,
+        "live": 1,
+        "guard": true,
+        "integration": "development",
+        "behind": 3,
+        "park": {
+          "action": "none",
+          "code": "on-integration",
+          "reason": "on development"
+        }
+      },
+      "worktrees": [
+        {
+          "path": "/Users/you/Documents/shop/.worktrees/shop-agent/order-history-api",
+          "repo": "shop-agent",
+          "main": "/Users/you/Documents/shop/shop-agent",
+          "kind": "worktree",
+          "slug": "order-history-api",
+          "branch": "feature/order-history-api",
+          "detached": false,
+          "head": "6860d53233dcac6121a557c18327e5342c37f385",
+          "dirty": 0,
+          "unpushed": 0,
+          "pr": {
+            "state": "CLOSED",
+            "head": "6860d53233dcac6121a557c18327e5342c37f385"
+          },
+          "lock": null,
+          "live": 0,
+          "gc": {
+            "action": "keep",
+            "code": "not-merged",
+            "reason": "feature/order-history-api not merged (pr=CLOSED, unpushed=0)"
+          }
+        },
+        {
+          "path": "/Users/you/Documents/shop/.worktrees/shop-agent/plan-hygiene-landed",
+          "repo": "shop-agent",
+          "main": "/Users/you/Documents/shop/shop-agent",
+          "kind": "worktree",
+          "slug": "plan-hygiene-landed",
+          "branch": "feature/plan-hygiene-landed",
+          "detached": false,
+          "head": "f32637c37c32d538fb9af1d8e691acb2677768fd",
+          "dirty": 0,
+          "unpushed": 0,
+          "pr": {
+            "state": "MERGED",
+            "head": "f32637c37c32d538fb9af1d8e691acb2677768fd"
+          },
+          "lock": null,
+          "live": 0,
+          "gc": {
+            "action": "would-remove",
+            "code": "pr-merged",
+            "reason": "feature/plan-hygiene-landed, pr=MERGED"
+          }
+        },
+        {
+          "path": "/Users/you/Documents/shop/.worktrees/shop-agent/avatar-proxy",
+          "repo": "shop-agent",
+          "main": "/Users/you/Documents/shop/shop-agent",
+          "kind": "worktree",
+          "slug": "avatar-proxy",
+          "branch": "feature/avatar-proxy",
+          "detached": false,
+          "head": "df5567547e11ed3b791ef9cd739054c332759ea4",
+          "dirty": 0,
+          "unpushed": 0,
+          "pr": {
+            "state": "CLOSED",
+            "head": "df5567547e11ed3b791ef9cd739054c332759ea4"
+          },
+          "lock": null,
+          "live": 0,
+          "gc": {
+            "action": "keep",
+            "code": "not-merged",
+            "reason": "feature/avatar-proxy not merged (pr=CLOSED, unpushed=0)"
+          }
+        }
+      ]
+    },
+    {
+      "info": {
+        "repo": "shop-research",
+        "main": "/Users/you/Documents/shop/shop-research",
+        "registered": true,
+        "guard": false,
+        "integration": "main",
+        "root": "/Users/you/worktrees",
+        "worktreeDir": "/Users/you/worktrees/shop-research",
+        "branchPrefix": "feature/",
+        "copy": [
+          ".env",
+          ".env.local"
+        ],
+        "keep": [],
+        "keepSource": "/Users/you/Documents/shop/shop-research",
+        "bootstrap": null,
+        "stale": 24,
+        "committedFile": false,
+        "sources": {
+          "guard": "local",
+          "integration": "remote-head",
+          "root": "global",
+          "branchPrefix": "default",
+          "copy": "default",
+          "keep": "default",
+          "keepSource": "default",
+          "bootstrap": "default",
+          "stale": "default"
+        },
+        "remotes": {
+          "base": {
+            "name": "origin",
+            "source": "default",
+            "slug": "you/shop-research"
+          },
+          "push": {
+            "name": "origin",
+            "source": "default",
+            "slug": "you/shop-research"
+          },
+          "ghUser": {
+            "login": null,
+            "source": "default"
+          },
+          "ignoredFromFile": []
+        },
+        "writable": {
+          "paths": [],
+          "source": "default"
+        }
+      },
+      "main": {
+        "path": "/Users/you/Documents/shop/shop-research",
+        "repo": "shop-research",
+        "main": "/Users/you/Documents/shop/shop-research",
+        "kind": "main",
+        "slug": null,
+        "branch": "main",
+        "detached": false,
+        "head": "53f6f2e818e18a677dbb7419d37b5ba52af102b0",
+        "dirty": 0,
+        "unpushed": null,
+        "pr": null,
+        "lock": null,
+        "live": 0,
+        "guard": false,
+        "integration": "main",
+        "behind": 0,
+        "park": {
+          "action": "none",
+          "code": "unguarded",
+          "reason": "not guarded, never parked"
+        }
+      },
+      "worktrees": []
+    },
+    {
+      "info": {
+        "repo": "lab",
+        "main": "/Users/you/Documents/Research/lab",
+        "registered": true,
+        "guard": false,
+        "integration": "main",
+        "root": "/Users/you/worktrees",
+        "worktreeDir": "/Users/you/worktrees/lab",
+        "branchPrefix": "feature/",
+        "copy": [
+          ".env",
+          ".env.local"
+        ],
+        "keep": [],
+        "keepSource": "/Users/you/Documents/Research/lab",
+        "bootstrap": null,
+        "stale": 24,
+        "committedFile": false,
+        "sources": {
+          "guard": "local",
+          "integration": "default",
+          "root": "global",
+          "branchPrefix": "default",
+          "copy": "default",
+          "keep": "default",
+          "keepSource": "default",
+          "bootstrap": "default",
+          "stale": "default"
+        },
+        "remotes": {
+          "base": {
+            "name": "origin",
+            "source": "default",
+            "slug": "you/lab"
+          },
+          "push": {
+            "name": "origin",
+            "source": "default",
+            "slug": "you/lab"
+          },
+          "ghUser": {
+            "login": null,
+            "source": "default"
+          },
+          "ignoredFromFile": []
+        },
+        "writable": {
+          "paths": [],
+          "source": "default"
+        }
+      },
+      "main": {
+        "path": "/Users/you/Documents/Research/lab",
+        "repo": "lab",
+        "main": "/Users/you/Documents/Research/lab",
+        "kind": "main",
+        "slug": null,
+        "branch": "main",
+        "detached": false,
+        "head": "cf927fb7d3930f822989bae33d58d08af14dfe99",
+        "dirty": 22,
+        "unpushed": null,
+        "pr": null,
+        "lock": null,
+        "live": 0,
+        "guard": false,
+        "integration": "main",
+        "behind": null,
+        "park": {
+          "action": "none",
+          "code": "unguarded",
+          "reason": "not guarded, never parked"
+        }
+      },
+      "worktrees": []
+    },
+    {
+      "info": {
+        "repo": "onetree",
+        "main": "/Users/you/Documents/projects/onetree",
+        "registered": true,
+        "guard": false,
+        "integration": "main",
+        "root": "/Users/you/worktrees",
+        "worktreeDir": "/Users/you/worktrees/onetree",
+        "branchPrefix": "feature/",
+        "copy": [],
+        "keep": [],
+        "keepSource": "/Users/you/Documents/projects/onetree",
+        "bootstrap": null,
+        "stale": 24,
+        "committedFile": true,
+        "sources": {
+          "guard": "local",
+          "integration": "remote-head",
+          "root": "global",
+          "branchPrefix": "default",
+          "copy": "file",
+          "keep": "default",
+          "keepSource": "default",
+          "bootstrap": "default",
+          "stale": "default"
+        },
+        "remotes": {
+          "base": {
+            "name": "origin",
+            "source": "default",
+            "slug": "you/onetree"
+          },
+          "push": {
+            "name": "origin",
+            "source": "default",
+            "slug": "you/onetree"
+          },
+          "ghUser": {
+            "login": null,
+            "source": "default"
+          },
+          "ignoredFromFile": []
+        },
+        "writable": {
+          "paths": [],
+          "source": "default"
+        }
+      },
+      "main": {
+        "path": "/Users/you/Documents/projects/onetree",
+        "repo": "onetree",
+        "main": "/Users/you/Documents/projects/onetree",
+        "kind": "main",
+        "slug": null,
+        "branch": "main",
+        "detached": false,
+        "head": "ff5be217f9c5cb3878b83552f5c307287c7c3e64",
+        "dirty": 0,
+        "unpushed": null,
+        "pr": null,
+        "lock": null,
+        "live": 17,
+        "guard": false,
+        "integration": "main",
+        "behind": 3,
+        "park": {
+          "action": "none",
+          "code": "unguarded",
+          "reason": "not guarded, never parked"
+        }
+      },
+      "worktrees": [
+        {
+          "path": "/Users/you/worktrees/onetree/pr1-json-output",
+          "repo": "onetree",
+          "main": "/Users/you/Documents/projects/onetree",
+          "kind": "worktree",
+          "slug": "pr1-json-output",
+          "branch": "feature/pr1-json-output",
+          "detached": false,
+          "head": "cced5d48987dbd3c214c111423f4e4bce58c8972",
+          "dirty": 0,
+          "unpushed": 0,
+          "pr": {
+            "state": "MERGED",
+            "head": "cced5d48987dbd3c214c111423f4e4bce58c8972"
+          },
+          "lock": null,
+          "live": 0,
+          "gc": {
+            "action": "would-remove",
+            "code": "pr-merged",
+            "reason": "feature/pr1-json-output, pr=MERGED"
+          }
+        },
+        {
+          "path": "/Users/you/worktrees/onetree/pr2-events",
+          "repo": "onetree",
+          "main": "/Users/you/Documents/projects/onetree",
+          "kind": "worktree",
+          "slug": "pr2-events",
+          "branch": "feature/pr2-events",
+          "detached": false,
+          "head": "6c0812ce7e93261fcde7be09e1dbbdcda1787118",
+          "dirty": 0,
+          "unpushed": 1,
+          "pr": {
+            "state": "MERGED",
+            "head": "6c0812ce7e93261fcde7be09e1dbbdcda1787118"
+          },
+          "lock": null,
+          "live": 0,
+          "gc": {
+            "action": "would-remove",
+            "code": "pr-merged",
+            "reason": "feature/pr2-events, pr=MERGED"
+          }
+        },
+        {
+          "path": "/Users/you/worktrees/onetree/pr3-agents",
+          "repo": "onetree",
+          "main": "/Users/you/Documents/projects/onetree",
+          "kind": "worktree",
+          "slug": "pr3-agents",
+          "branch": "feature/pr3-agents",
+          "detached": false,
+          "head": "429a68e36d9500fb070c7cb1b7f335c2aa08b606",
+          "dirty": 0,
+          "unpushed": 1,
+          "pr": {
+            "state": "MERGED",
+            "head": "429a68e36d9500fb070c7cb1b7f335c2aa08b606"
+          },
+          "lock": null,
+          "live": 0,
+          "gc": {
+            "action": "would-remove",
+            "code": "pr-merged",
+            "reason": "feature/pr3-agents, pr=MERGED"
+          }
+        },
+        {
+          "path": "/Users/you/worktrees/onetree/pr4-ui",
+          "repo": "onetree",
+          "main": "/Users/you/Documents/projects/onetree",
+          "kind": "worktree",
+          "slug": "pr4-ui",
+          "branch": "feature/pr4-ui",
+          "detached": false,
+          "head": "775178a8548b88b4fa29d817743d0bfd72a59758",
+          "dirty": 5,
+          "unpushed": 0,
+          "pr": {
+            "state": "NONE",
+            "head": null
+          },
+          "lock": null,
+          "live": 14,
+          "gc": {
+            "action": "keep",
+            "code": "live",
+            "reason": "14 live process(es) inside"
+          }
+        },
+        {
+          "path": "/Users/you/worktrees/onetree/readonly-main-reqs",
+          "repo": "onetree",
+          "main": "/Users/you/Documents/projects/onetree",
+          "kind": "worktree",
+          "slug": "readonly-main-reqs",
+          "branch": "feature/readonly-main-reqs",
+          "detached": false,
+          "head": "6a353a43e271b516d8eaff74981dc0e406aef47d",
+          "dirty": 0,
+          "unpushed": 0,
+          "pr": {
+            "state": "OPEN",
+            "head": "6a353a43e271b516d8eaff74981dc0e406aef47d"
+          },
+          "lock": null,
+          "live": 0,
+          "gc": {
+            "action": "keep",
+            "code": "pr-open",
+            "reason": "PR open (feature/readonly-main-reqs)"
+          }
+        },
+        {
+          "path": "/Users/you/worktrees/onetree/review-feature-search-hardening",
+          "repo": "onetree",
+          "main": "/Users/you/Documents/projects/onetree",
+          "kind": "worktree",
+          "slug": "review-feature-search-hardening",
+          "branch": null,
+          "detached": true,
+          "head": "f067c57cac75ea916a24f464e820aa4d83c0f6f1",
+          "dirty": 0,
+          "unpushed": 1,
+          "pr": {
+            "state": "NONE",
+            "head": null
+          },
+          "lock": null,
+          "live": 0,
+          "gc": {
+            "action": "keep",
+            "code": "not-merged",
+            "reason": "(detached) not merged (pr=NONE, unpushed=1)"
+          }
+        },
+        {
+          "path": "/Users/you/worktrees/onetree/review-feature-readonly-main-lock",
+          "repo": "onetree",
+          "main": "/Users/you/Documents/projects/onetree",
+          "kind": "worktree",
+          "slug": "review-feature-readonly-main-lock",
+          "branch": null,
+          "detached": true,
+          "head": "5c09ec1f19f06d1f57a4454376cca2403e3bfa72",
+          "dirty": 0,
+          "unpushed": 1,
+          "pr": {
+            "state": "NONE",
+            "head": null
+          },
+          "lock": null,
+          "live": 0,
+          "gc": {
+            "action": "keep",
+            "code": "young",
+            "reason": "no merged PR and younger than 24h"
+          }
+        }
+      ]
+    },
+    {
+      "info": {
+        "repo": "relay",
+        "main": "/Users/you/Documents/projects/relay",
+        "registered": true,
+        "guard": true,
+        "integration": "main",
+        "root": "/Users/you/worktrees",
+        "worktreeDir": "/Users/you/worktrees/relay",
+        "branchPrefix": "feature/",
+        "copy": [
+          ".env",
+          ".env.local"
+        ],
+        "keep": [],
+        "keepSource": "/Users/you/Documents/projects/relay",
+        "bootstrap": null,
+        "stale": 24,
+        "committedFile": false,
+        "sources": {
+          "guard": "local",
+          "integration": "remote-head",
+          "root": "global",
+          "branchPrefix": "default",
+          "copy": "default",
+          "keep": "default",
+          "keepSource": "default",
+          "bootstrap": "default",
+          "stale": "default"
+        },
+        "remotes": {
+          "base": {
+            "name": "origin",
+            "source": "default",
+            "slug": "you/relay"
+          },
+          "push": {
+            "name": "origin",
+            "source": "default",
+            "slug": "you/relay"
+          },
+          "ghUser": {
+            "login": null,
+            "source": "default"
+          },
+          "ignoredFromFile": []
+        },
+        "writable": {
+          "paths": [],
+          "source": "default"
+        }
+      },
+      "main": {
+        "path": "/Users/you/Documents/projects/relay",
+        "repo": "relay",
+        "main": "/Users/you/Documents/projects/relay",
+        "kind": "main",
+        "slug": null,
+        "branch": "main",
+        "detached": false,
+        "head": "32e5e91c3452a99d3ef8fe1f7e528128a915b4c8",
+        "dirty": 0,
+        "unpushed": null,
+        "pr": null,
+        "lock": null,
+        "live": 5,
+        "guard": true,
+        "integration": "main",
+        "behind": 0,
+        "park": {
+          "action": "none",
+          "code": "on-integration",
+          "reason": "on main"
+        }
+      },
+      "worktrees": [
+        {
+          "path": "/Users/you/worktrees/relay/run-dev-server",
+          "repo": "relay",
+          "main": "/Users/you/Documents/projects/relay",
+          "kind": "worktree",
+          "slug": "run-dev-server",
+          "branch": "feature/run-dev-server",
+          "detached": false,
+          "head": "32e5e91c3452a99d3ef8fe1f7e528128a915b4c8",
+          "dirty": 0,
+          "unpushed": 0,
+          "pr": {
+            "state": "NONE",
+            "head": null
+          },
+          "lock": null,
+          "live": 1,
+          "gc": {
+            "action": "keep",
+            "code": "live",
+            "reason": "1 live process(es) inside"
+          }
+        }
+      ]
+    },
+    {
+      "info": {
+        "repo": "ledger",
+        "main": "/Users/you/Documents/projects/ledger",
+        "registered": true,
+        "guard": true,
+        "integration": "main",
+        "root": "/Users/you/worktrees",
+        "worktreeDir": "/Users/you/worktrees/ledger",
+        "branchPrefix": "feature/",
+        "copy": [
+          ".env",
+          ".env.local"
+        ],
+        "keep": [],
+        "keepSource": "/Users/you/Documents/projects/ledger",
+        "bootstrap": null,
+        "stale": 24,
+        "committedFile": false,
+        "sources": {
+          "guard": "local",
+          "integration": "remote-head",
+          "root": "global",
+          "branchPrefix": "default",
+          "copy": "default",
+          "keep": "default",
+          "keepSource": "default",
+          "bootstrap": "default",
+          "stale": "default"
+        },
+        "remotes": {
+          "base": {
+            "name": "origin",
+            "source": "default",
+            "slug": "you/ledger"
+          },
+          "push": {
+            "name": "origin",
+            "source": "default",
+            "slug": "you/ledger"
+          },
+          "ghUser": {
+            "login": null,
+            "source": "default"
+          },
+          "ignoredFromFile": []
+        },
+        "writable": {
+          "paths": [],
+          "source": "default"
+        }
+      },
+      "main": {
+        "path": "/Users/you/Documents/projects/ledger",
+        "repo": "ledger",
+        "main": "/Users/you/Documents/projects/ledger",
+        "kind": "main",
+        "slug": null,
+        "branch": "main",
+        "detached": false,
+        "head": "6a01445c48f55af943e9e5eca9256628da58504f",
+        "dirty": 1,
+        "unpushed": null,
+        "pr": null,
+        "lock": null,
+        "live": 10,
+        "guard": true,
+        "integration": "main",
+        "behind": 0,
+        "park": {
+          "action": "none",
+          "code": "on-integration",
+          "reason": "on main"
+        }
+      },
+      "worktrees": [
+        {
+          "path": "/Users/you/Documents/projects/ledger.worktrees/pricing-page-copy",
+          "repo": "ledger",
+          "main": "/Users/you/Documents/projects/ledger",
+          "kind": "worktree",
+          "slug": "pricing-page-copy",
+          "branch": "agents/pricing-page-copy",
+          "detached": false,
+          "head": "a1bc2968e37f30ef7a74694e3c0b7c4609b0de08",
+          "dirty": 0,
+          "unpushed": 0,
+          "pr": {
+            "state": "NONE",
+            "head": null
+          },
+          "lock": null,
+          "live": 0,
+          "gc": {
+            "action": "would-remove",
+            "code": "in-integration",
+            "reason": "agents/pricing-page-copy, pr=NONE"
+          }
+        },
+        {
+          "path": "/Users/you/worktrees/ledger/rate-limit-backoff",
+          "repo": "ledger",
+          "main": "/Users/you/Documents/projects/ledger",
+          "kind": "worktree",
+          "slug": "rate-limit-backoff",
+          "branch": "feature/rate-limit-backoff",
+          "detached": false,
+          "head": "6a01445c48f55af943e9e5eca9256628da58504f",
+          "dirty": 1,
+          "unpushed": 0,
+          "pr": {
+            "state": "NONE",
+            "head": null
+          },
+          "lock": null,
+          "live": 0,
+          "gc": {
+            "action": "keep",
+            "code": "dirty",
+            "reason": "1 uncommitted path(s)"
+          }
+        }
+      ]
+    }
+  ],
+  "agents": [
+    {
+      "pid": 91278,
+      "agent": "pi",
+      "session": "9f2c1a7e-4b3d-4e2f-8a1c-0d5e6f7a8b9c",
+      "command": "pi",
+      "exe": "pi",
+      "cwd": "/Users/you/Documents/shop/.worktrees/shop-web/pi-260917-160353",
+      "kind": "worktree",
+      "repo": "shop-web",
+      "main": "/Users/you/Documents/shop/shop-web",
+      "path": "/Users/you/Documents/shop/.worktrees/shop-web/pi-260917-160353",
+      "slug": "pi-260917-160353",
+      "started": 1789632242,
+      "startedAt": "2026-09-17T08:04:02Z"
+    },
+    {
+      "pid": 96290,
+      "agent": "claude",
+      "session": null,
+      "command": "claude -w claude-260917-162554",
+      "exe": "claude",
+      "cwd": "/Users/you/Documents/shop/.worktrees/shop-web/claude-260917-162554",
+      "kind": "worktree",
+      "repo": "shop-web",
+      "main": "/Users/you/Documents/shop/shop-web",
+      "path": "/Users/you/Documents/shop/.worktrees/shop-web/claude-260917-162554",
+      "slug": "claude-260917-162554",
+      "started": 1789633554,
+      "startedAt": "2026-09-17T08:25:54Z"
+    },
+    {
+      "pid": 78552,
+      "agent": "claude",
+      "session": "c3a1b2d4-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+      "command": "/Users/you/Library/Application Support/Claude/claude-code/2.1.275/claude.app/Contents/MacOS/claude --output-format stream-json --verbose --input-format stream-json --effort xhigh --model claude",
+      "exe": "claude",
+      "cwd": "/Users/you/Documents/projects/onetree",
+      "kind": "main",
+      "repo": "onetree",
+      "main": "/Users/you/Documents/projects/onetree",
+      "path": "/Users/you/Documents/projects/onetree",
+      "slug": null,
+      "started": 1789805009,
+      "startedAt": "2026-09-19T08:03:29Z"
+    },
+    {
+      "pid": 92657,
+      "agent": "claude",
+      "session": null,
+      "command": "/Users/you/Library/Application Support/Claude/claude-code/2.1.275/claude.app/Contents/MacOS/claude --output-format stream-json --verbose --input-format stream-json --effort xhigh --model claude",
+      "exe": "claude",
+      "cwd": "/Users/you/Documents/projects/onetree",
+      "kind": "main",
+      "repo": "onetree",
+      "main": "/Users/you/Documents/projects/onetree",
+      "path": "/Users/you/Documents/projects/onetree",
+      "slug": null,
+      "started": 1789810123,
+      "startedAt": "2026-09-19T09:28:43Z"
+    },
+    {
+      "pid": 54738,
+      "agent": "claude",
+      "session": null,
+      "command": "/Users/you/Library/Application Support/Claude/claude-code/2.1.275/claude.app/Contents/MacOS/claude --output-format stream-json --verbose --input-format stream-json --effort xhigh --model claude",
+      "exe": "claude",
+      "cwd": "/Users/you/Documents/shop/.worktrees/shop-web/rail-scroll-restore",
+      "kind": "worktree",
+      "repo": "shop-web",
+      "main": "/Users/you/Documents/shop/shop-web",
+      "path": "/Users/you/Documents/shop/.worktrees/shop-web/rail-scroll-restore",
+      "slug": "rail-scroll-restore",
+      "started": 1789889775,
+      "startedAt": "2026-09-20T07:36:15Z"
+    },
+    {
+      "pid": 59267,
+      "agent": "claude",
+      "session": null,
+      "command": "/Users/you/Library/Application Support/Claude/claude-code/2.1.275/claude.app/Contents/MacOS/claude --output-format stream-json --verbose --input-format stream-json --effort xhigh --model claude",
+      "exe": "claude",
+      "cwd": "/Users/you/worktrees/onetree/pr4-ui",
+      "kind": "worktree",
+      "repo": "onetree",
+      "main": "/Users/you/Documents/projects/onetree",
+      "path": "/Users/you/worktrees/onetree/pr4-ui",
+      "slug": "pr4-ui",
+      "started": 1789960936,
+      "startedAt": "2026-09-21T03:22:16Z"
+    },
+    {
+      "pid": 65363,
+      "agent": "claude",
+      "session": null,
+      "command": "/Users/you/Library/Application Support/Claude/claude-code/2.1.275/claude.app/Contents/MacOS/claude --output-format stream-json --verbose --input-format stream-json --thinking adaptive --effort ",
+      "exe": "claude",
+      "cwd": "/Users/you/Documents/projects/ledger",
+      "kind": "main",
+      "repo": "ledger",
+      "main": "/Users/you/Documents/projects/ledger",
+      "path": "/Users/you/Documents/projects/ledger",
+      "slug": null,
+      "started": 1789961169,
+      "startedAt": "2026-09-21T03:26:09Z"
+    },
+    {
+      "pid": 3517,
+      "agent": "claude",
+      "session": null,
+      "command": "/Users/you/Library/Application Support/Claude/claude-code/2.1.275/claude.app/Contents/MacOS/claude --output-format stream-json --verbose --input-format stream-json --effort xhigh --model claude",
+      "exe": "claude",
+      "cwd": "/Users/you/worktrees/relay/run-dev-server",
+      "kind": "worktree",
+      "repo": "relay",
+      "main": "/Users/you/Documents/projects/relay",
+      "path": "/Users/you/worktrees/relay/run-dev-server",
+      "slug": "run-dev-server",
+      "started": 1789967527,
+      "startedAt": "2026-09-21T05:12:07Z"
+    }
+  ],
+  "doctor": {
+    "ok": 43,
+    "failed": 1,
+    "repos": [
+      "shop-web",
+      "shop-deploy",
+      "shop-agent",
+      "shop-research",
+      "lab",
+      "onetree",
+      "relay",
+      "ledger"
+    ],
+    "checks": [
+      {
+        "name": "git on PATH",
+        "ok": true
+      },
+      {
+        "name": "jq on PATH",
+        "ok": true
+      },
+      {
+        "name": "gh on PATH",
+        "ok": true
+      },
+      {
+        "name": "lsof on PATH",
+        "ok": true
+      },
+      {
+        "name": "git >= 2.31 (worktree --path-format)",
+        "ok": true
+      },
+      {
+        "name": "gh logged in",
+        "ok": true
+      },
+      {
+        "name": "/Users/you/.local/bin/onetree executable, not a symlink",
+        "ok": true
+      },
+      {
+        "name": "onetree on PATH resolves to /Users/you/.local/bin/onetree",
+        "ok": true
+      },
+      {
+        "name": "registry /Users/you/.config/onetree/config",
+        "ok": true
+      },
+      {
+        "name": "Claude hooks point at /Users/you/.local/bin/onetree",
+        "ok": true
+      },
+      {
+        "name": "Codex hooks point at /Users/you/.local/bin/onetree",
+        "ok": true
+      },
+      {
+        "name": "rules block in ~/.claude/CLAUDE.md",
+        "ok": true
+      },
+      {
+        "name": "rules block in ~/.codex/AGENTS.md",
+        "ok": true
+      },
+      {
+        "name": "rules block in ~/.pi/agent/AGENTS.md",
+        "ok": true
+      },
+      {
+        "name": "pi extension calls /Users/you/.local/bin/onetree",
+        "ok": true
+      },
+      {
+        "name": "shell wrappers sourced",
+        "ok": true
+      },
+      {
+        "name": "shell wrappers fail closed",
+        "ok": true
+      },
+      {
+        "name": "shell wrappers pin /Users/you/.local/bin/onetree",
+        "ok": true
+      },
+      {
+        "name": "gc job loaded (launchd com.onetree.gc)",
+        "ok": true
+      },
+      {
+        "name": "guard blocks a mutation in a guarded mirror (skipped when none registered)",
+        "ok": true
+      },
+      {
+        "name": "guard blocks a script run in a guarded mirror (skipped when none registered)",
+        "ok": true
+      },
+      {
+        "name": "guard lets a read pass in a guarded mirror (skipped when none registered)",
+        "ok": true
+      },
+      {
+        "name": "guard fail-open on invalid json",
+        "ok": true
+      },
+      {
+        "name": "guard blocks chmod in a guarded mirror (skipped when none registered)",
+        "ok": true
+      },
+      {
+        "name": "guard blocks find-exec chmod in a guarded mirror (skipped when none registered)",
+        "ok": true
+      },
+      {
+        "name": "event log dir /Users/you/.local/state/onetree is writable or creatable",
+        "ok": true
+      },
+      {
+        "name": "guarded main /Users/you/Documents/shop/shop-web has no user-writable working-tree entry",
+        "ok": true
+      },
+      {
+        "name": "guarded main /Users/you/Documents/shop/shop-web porcelain clean (or warn-only dirty is a FAIL)",
+        "ok": true
+      },
+      {
+        "name": "park lock for /Users/you/Documents/shop/shop-web is not stale",
+        "ok": true
+      },
+      {
+        "name": "guarded main /Users/you/Documents/shop/shop-deploy has no user-writable working-tree entry",
+        "ok": true
+      },
+      {
+        "name": "guarded main /Users/you/Documents/shop/shop-deploy porcelain clean (or warn-only dirty is a FAIL)",
+        "ok": true
+      },
+      {
+        "name": "park lock for /Users/you/Documents/shop/shop-deploy is not stale",
+        "ok": true
+      },
+      {
+        "name": "guarded main /Users/you/Documents/shop/shop-agent has no user-writable working-tree entry",
+        "ok": true
+      },
+      {
+        "name": "guarded main /Users/you/Documents/shop/shop-agent porcelain clean (or warn-only dirty is a FAIL)",
+        "ok": true
+      },
+      {
+        "name": "park lock for /Users/you/Documents/shop/shop-agent is not stale",
+        "ok": true
+      },
+      {
+        "name": "guarded main /Users/you/Documents/projects/relay has no user-writable working-tree entry",
+        "ok": true
+      },
+      {
+        "name": "guarded main /Users/you/Documents/projects/relay porcelain clean (or warn-only dirty is a FAIL)",
+        "ok": true
+      },
+      {
+        "name": "park lock for /Users/you/Documents/projects/relay is not stale",
+        "ok": true
+      },
+      {
+        "name": "guarded main /Users/you/Documents/projects/ledger has no user-writable working-tree entry",
+        "ok": true
+      },
+      {
+        "name": "guarded main /Users/you/Documents/projects/ledger porcelain clean (or warn-only dirty is a FAIL)",
+        "ok": false
+      },
+      {
+        "name": "park lock for /Users/you/Documents/projects/ledger is not stale",
+        "ok": true
+      },
+      {
+        "name": "unguarded main /Users/you/Documents/shop/shop-research root is user-writable",
+        "ok": true
+      },
+      {
+        "name": "unguarded main /Users/you/Documents/Research/lab root is user-writable",
+        "ok": true
+      },
+      {
+        "name": "unguarded main /Users/you/Documents/projects/onetree root is user-writable",
+        "ok": true
+      }
+    ]
+  },
+  "events": [
+    {
+      "ts": "2026-09-20T06:32:55Z",
+      "t": 1789885975,
+      "kind": "gc-run",
+      "cmd": "gc",
+      "target": "--all",
+      "kept": 12,
+      "removed": 1,
+      "parked": 0,
+      "fastForwarded": 1,
+      "seconds": 41
+    },
+    {
+      "ts": "2026-09-20T06:32:35Z",
+      "t": 1789885955,
+      "kind": "gc",
+      "cmd": "gc",
+      "action": "remove",
+      "code": "pr-merged",
+      "reason": "feature/plans-approval-in-chat, pr=MERGED",
+      "path": "/Users/you/Documents/shop/.worktrees/shop-web/plans-approval-in-chat",
+      "repo": "shop-web",
+      "branch": "feature/plans-approval-in-chat"
+    },
+    {
+      "ts": "2026-09-20T06:32:45Z",
+      "t": 1789885965,
+      "kind": "park",
+      "cmd": "gc",
+      "action": "fast-forwarded",
+      "code": "updated",
+      "reason": "main to b474890",
+      "main": "/Users/you/Documents/shop/shop-web",
+      "repo": "shop-web"
+    },
+    {
+      "ts": "2026-09-20T09:34:35Z",
+      "t": 1789896875,
+      "kind": "new",
+      "cmd": "new",
+      "path": "/Users/you/worktrees/onetree/pr4-ui",
+      "repo": "onetree",
+      "branch": "feature/pr4-ui",
+      "resumed": false
+    },
+    {
+      "ts": "2026-09-20T10:34:35Z",
+      "t": 1789900475,
+      "kind": "guard",
+      "cmd": "guard",
+      "decision": "block",
+      "rule": "mutating git",
+      "tool": "Bash",
+      "agent": "claude",
+      "session": "9f2c1a7e-4b3d-4e2f-8a1c-0d5e6f7a8b9c",
+      "pid": 54738,
+      "cwd": "/Users/you/Documents/shop/shop-web",
+      "path": "/Users/you/Documents/shop/shop-web",
+      "main": "/Users/you/Documents/shop/shop-web",
+      "repo": "shop-web",
+      "command": "git checkout other-branch",
+      "file": ""
+    },
+    {
+      "ts": "2026-09-20T11:34:35Z",
+      "t": 1789904075,
+      "kind": "guard",
+      "cmd": "guard",
+      "decision": "block",
+      "rule": "running a script, server or test",
+      "tool": "Bash",
+      "agent": "pi",
+      "session": null,
+      "pid": 91278,
+      "cwd": "/Users/you/Documents/shop/shop-deploy",
+      "path": "/Users/you/Documents/shop/shop-deploy",
+      "main": "/Users/you/Documents/shop/shop-deploy",
+      "repo": "shop-deploy",
+      "command": "npm run dev",
+      "file": ""
+    },
+    {
+      "ts": "2026-09-20T12:19:35Z",
+      "t": 1789906775,
+      "kind": "guard",
+      "cmd": "guard",
+      "decision": "block",
+      "rule": "running a script, server or test",
+      "tool": "Bash",
+      "agent": "pi",
+      "session": null,
+      "pid": 91278,
+      "cwd": "/Users/you/Documents/shop/shop-deploy",
+      "path": "/Users/you/Documents/shop/shop-deploy",
+      "main": "/Users/you/Documents/shop/shop-deploy",
+      "repo": "shop-deploy",
+      "command": "make deploy",
+      "file": ""
+    },
+    {
+      "ts": "2026-09-20T12:24:35Z",
+      "t": 1789907075,
+      "kind": "guard",
+      "cmd": "guard",
+      "decision": "block",
+      "rule": "running a script, server or test",
+      "tool": "Bash",
+      "agent": "pi",
+      "session": null,
+      "pid": 91278,
+      "cwd": "/Users/you/Documents/shop/shop-deploy",
+      "path": "/Users/you/Documents/shop/shop-deploy",
+      "main": "/Users/you/Documents/shop/shop-deploy",
+      "repo": "shop-deploy",
+      "command": "make deploy ENV=staging",
+      "file": ""
+    },
+    {
+      "ts": "2026-09-20T17:34:35Z",
+      "t": 1789925675,
+      "kind": "guard",
+      "cmd": "guard",
+      "decision": "block",
+      "rule": "a file-changing command",
+      "tool": "Bash",
+      "agent": "codex",
+      "session": "1a2b3c4d-0000-4000-8000-000000000001",
+      "pid": 71234,
+      "cwd": "/Users/you/Documents/shop/shop-agent",
+      "path": "/Users/you/Documents/shop/shop-agent",
+      "main": "/Users/you/Documents/shop/shop-agent",
+      "repo": "shop-agent",
+      "command": "sed -i 's/a/b/' src/app.ts",
+      "file": ""
+    },
+    {
+      "ts": "2026-09-20T23:34:35Z",
+      "t": 1789947275,
+      "kind": "guard",
+      "cmd": "guard",
+      "decision": "block",
+      "rule": "running a mirror script by path",
+      "tool": "Bash",
+      "agent": "claude",
+      "session": "c3a1b2d4-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+      "pid": 59267,
+      "cwd": "/Users/you/worktrees/onetree/pr4-ui",
+      "path": "/Users/you/Documents/shop/shop-web",
+      "main": "/Users/you/Documents/shop/shop-web",
+      "repo": "shop-web",
+      "command": "du -sh /Users/you/Documents/shop/shop-web/node_modules",
+      "file": ""
+    },
+    {
+      "ts": "2026-09-21T03:34:35Z",
+      "t": 1789961675,
+      "kind": "guard",
+      "cmd": "guard",
+      "decision": "block",
+      "rule": "a write",
+      "tool": "Edit",
+      "agent": "claude",
+      "session": "9f2c1a7e-4b3d-4e2f-8a1c-0d5e6f7a8b9c",
+      "pid": 54738,
+      "cwd": "/Users/you/Documents/shop/shop-web",
+      "path": "/Users/you/Documents/shop/shop-web/README.md",
+      "main": "/Users/you/Documents/shop/shop-web",
+      "repo": "shop-web",
+      "command": "",
+      "file": "/Users/you/Documents/shop/shop-web/README.md"
+    },
+    {
+      "ts": "2026-09-21T05:09:35Z",
+      "t": 1789967375,
+      "kind": "gc-run",
+      "cmd": "gc",
+      "target": "--all",
+      "kept": 13,
+      "removed": 0,
+      "parked": 0,
+      "fastForwarded": 0,
+      "seconds": 38
+    }
+  ]
+}

@@ -1,0 +1,5 @@
+[onetree]
+	guard = false
+	copy =
+	# the dashboard's package.json lives in ui/, not at the root, so the built-in lockfile install never sees it
+	bootstrap = cd ui && npm ci --ignore-scripts

@@ -60,17 +60,14 @@ a subcommand or a config key is missing from it.
 
 ## What a pull request needs
 
-- A test for the behaviour, in `tests/run.sh` or the dashboard tests. One
-  assertion per behaviour; a table of cases where several inputs share a
-  rule. Guard changes get an `allow`/`block` line per command shape.
-- `shellcheck -S warning bin/onetree tests/run.sh` clean. Use a
-  `# shellcheck disable=` comment with a reason only where the warning is
-  wrong.
-- bash 3.2 compatible: no associative arrays, no `${var,,}`, no `mapfile`, no
-  `;&`. On macOS the script may run under `/bin/bash`, which is 3.2.
-- A `CHANGELOG.md` entry under Unreleased that says what changed and why,
-  with the failure that motivated it when there was one.
-- A `docs/reference.md` update when a setting or rule changes.
+The rules, for people and agents alike, are in [`AGENTS.md`](AGENTS.md): the
+gates, bash 3.2, how tests are written, the CHANGELOG line, and never pushing
+to `main`. Releases follow [`RELEASING.md`](RELEASING.md). Beyond those:
+
+- A CHANGELOG entry says what changed and why, with the failure that
+  motivated it when there was one.
+- A `# shellcheck disable=` comment carries a reason, and only where the
+  warning is wrong.
 - For a larger design choice, or an approach tried and dropped, a note in
   `docs/design/`: a status line, the problem, the decision, what was
   rejected and why. Keep the status current.

@@ -1,7 +1,7 @@
 {
   "name": "onetree-ui",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "The onetree dashboard: a loopback page over `onetree snapshot`. Served by `onetree ui`.",
   "type": "module",
   "engines": {

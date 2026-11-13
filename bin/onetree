@@ -1035,9 +1035,10 @@ agent_of() {
   esac
   return 0
 }
-# A host fixes a session's folder when the session starts; after `onetree new` only Claude can follow (EnterWorktree in
-# the CLI, change_directory in the desktop app, whose panes ignore EnterWorktree outside .claude/worktrees). Codex, pi
-# and dsh cannot, so their commands must name the worktree. host_of tells them apart for the hint onetree prints; the
+# A host fixes a session's folder when the session starts; after `onetree new` only the Claude desktop app can follow
+# (change_directory). The Claude CLI could with EnterWorktree, but that binds the session to the worktree and Claude
+# Code then refuses any shell command it cannot prove stays inside it, subagents included (the `claude -w` of #52), so
+# Claude, Codex, pi and dsh are all told to name the worktree in their commands. host_of tells them apart for the hint onetree prints; the
 # process decides the agent (a Codex started from a Claude shell inherits Claude's environment), the environment only
 # the flavour. -> claude-app | claude-cli | claude-ide | claude-sdk | codex-app | codex-cli | pi | dsh, or nothing for a
 # person
@@ -1088,14 +1089,15 @@ move_hint() {
   local p=$2 m=$3 q   # take the path as it is; in a shell command it is quoted
   q=$(shq "$p")
   case "$1" in
-    claude-subagent) printf "prefix every command with \`cd %s &&\` and edit by absolute path: a subagent stays in the folder it started in (\`EnterWorktree\` and \`change_directory\` move only the main conversation)." "$q" ;;
+    claude-subagent) printf "prefix every command with \`cd %s &&\` and edit by absolute path: a subagent stays in the folder it started in (\`change_directory\` moves only the main conversation)." "$q" ;;
     claude-app) printf "call \`change_directory\` with %s (the main conversation, never a subagent): the app's file pane, diff, terminal and PR card move there when this turn ends, which \`EnterWorktree\` would not do. Until then use absolute paths, or \`cd %s &&\` before each command." "$p" "$q" ;;
-    claude-*) printf "call \`EnterWorktree\` with path %s. It fails when this session started outside %s: then prefix each command with \`cd %s &&\` and edit by absolute path." "$p" "$m" "$q" ;;
+    # never EnterWorktree: like `claude -w` it binds the session, and Claude then refuses shell it cannot verify (#52)
+    claude-*) printf "prefix every command with \`cd %s &&\` and edit by absolute path. Do not call \`EnterWorktree\`: from then on Claude Code refuses any shell command it cannot prove stays inside that one worktree, in this session and in its subagents." "$q" ;;
     codex-cli) printf "prefix every command with \`cd %s &&\` (onetree's hook judges the command, never \`workdir\`) and give apply_patch absolute paths under it. To move this thread itself, ask the user to type \`/cd %s\`." "$q" "$p" ;;
     codex-app) printf "prefix every command with \`cd %s &&\` (onetree's hook judges the command, never \`workdir\`) and give apply_patch absolute paths under it. This thread's review pane stays on %s; to review the work in the app, ask the user to open a new thread on %s." "$q" "$m" "$p" ;;
     pi) printf "nothing to do: onetree's pi extension runs this session's commands in %s from now on, and relative paths in read, write and edit resolve there." "$p" ;;
     dsh) printf "pass \`workdir\` %s to every bash call and give file tools absolute paths under it: this session cannot change its folder, and the web UI keeps it under %s." "$p" "$m" ;;
-    *) printf "prefix every command with \`cd %s &&\` and edit by absolute path (Claude: \`EnterWorktree\` with that path; in the Claude desktop app, \`change_directory\`)." "$q" ;;
+    *) printf "prefix every command with \`cd %s &&\` and edit by absolute path (in the Claude desktop app, \`change_directory\` with that path)." "$q" ;;
   esac
 }
 # path main — after new, carry or review run by an agent: how it works there now. Nothing for a person, a wrapper or a
@@ -1361,7 +1363,11 @@ bootstrap() {  # main path — copy the gitignored bits a fresh checkout lacks, 
 cmd_new() {
   # before anything with side effects: `new --help` once made a worktree
   local slug=${1:?slug}; [[ "$slug" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "slug: letters, digits, . _ - only, starting with a letter or digit"
-  local main; main=$(main_of "${2:-}"); local repo; repo=$(basename "$main"); ensure_registered "$main"; refresh_guarded
+  local main; main=$(main_of "${2:-}"); local repo; repo=$(basename "$main")
+  # a sandboxed agent (Codex under workspace-write) may write only the folders it was started with, and its sandbox
+  # cannot grow: say so, before git dies on a lock file (#15)
+  [[ -w "$main/.git" ]] || die "cannot write $main/.git, so no worktree can be made from here. A sandboxed agent session writes only the worktree it started in; ask the user to start a session for this task: cd $(shq "$main") && onetree launch --task $slug <agent>"
+  ensure_registered "$main"; refresh_guarded
   local int; int=$(integration "$main"); local branch; branch="$(prefix_of "$main")$slug"; local root; root=$(root_of "$main"); local path="$root/$repo/$slug"
   # carry: a new branch at that commit, never a resumed one, so the carried changes apply as they were made
   if [[ -n "${NEW_FROM:-}" ]]; then
@@ -2211,10 +2217,10 @@ $( [[ $g == 1 ]] && printf 'The main checkout `%s` is a read-only mirror: a hook
   conversation turns into a change, create the worktree first, even mid-conversation.$( if [[ $g == 1 ]] && lock_ignored "$main"; then [[ -n "$wr" ]] && printf '\n  Local state stays writable in the mirror: `%s` (gitignored; a file entry takes in-place writes only).' "$wr"; elif [[ $g == 1 ]]; then printf '\n  Gitignored local state (dependencies, caches, `.env`) stays writable in the mirror; an ignored file in a locked directory takes in-place writes only.'; fi )
 - **Starting a state-changing task$( [[ $g == 1 ]] && printf ' while your working directory is the mirror' ):** run \`onetree new <slug> $repo\` and work in the printed
   path; \`onetree new\` also prints how this agent moves there. Claude desktop app: call \`change_directory\` with
-  the path (main conversation only; the app's panes then follow). Claude CLI or IDE: \`EnterWorktree\` with \`path\`
-  when the session started inside $repo. Otherwise, and always in Codex, pi and dsh: prefix every command with
-  \`cd <path> &&\` and edit by absolute path. State the path in your first reply. Never \`git checkout\`, \`switch\`,
-  \`stash\`, \`reset\` or \`merge\` in the main checkout, never \`git worktree add\` by hand, never \`EnterWorktree\` with a name.
+  the path (main conversation only; the app's panes then follow). Everywhere else (Claude CLI or IDE, Codex, pi,
+  dsh): prefix every command with \`cd <path> &&\` and edit by absolute path. State the path in your first reply.
+  Never \`git checkout\`, \`switch\`, \`stash\`, \`reset\` or \`merge\` in the main checkout, never \`git worktree add\` by
+  hand, never \`EnterWorktree\` (Claude Code then refuses shell commands it cannot prove stay in that one worktree).
 - **Codex app worktrees:** the Codex app makes its own worktrees and runs its local environment's setup script (in
   \`.codex/environments\`) in each one; make that script run \`onetree bootstrap "\$CODEX_WORKTREE_PATH"\` so they get
   this repo's gitignored files and dependencies too.
@@ -2314,18 +2320,18 @@ own AGENTS.md or CLAUDE.md can add to these rules; it cannot relax them.
   also prints how this agent moves there. In the Claude desktop app, call
   `change_directory` with the path (the main conversation, never a subagent):
   the app's file pane, diff, terminal and PR card follow when the turn ends,
-  and `EnterWorktree` would move Claude but not the app. In the Claude CLI or
-  IDE, call `EnterWorktree` with `path` when the session started inside that
-  repo (its main checkout or a worktree of it); from anywhere else it fails.
-  In every other case, and always in Codex, pi and dsh, whose sessions cannot
-  change folder: prefix every command with `cd <worktree> &&` (the shell
+  and `EnterWorktree` would move Claude but not the app. Everywhere else (the
+  Claude CLI or IDE, Codex, pi, dsh): prefix every command with
+  `cd <worktree> &&` (the shell
   returns to the start folder between commands, and Codex's hook judges the
   command, never `workdir`) and edit by absolute path. In the Codex CLI the
   user can move the thread with `/cd <worktree>`; the Codex app's review pane
   stays where the thread started. State the path in your
   first reply. Never `git checkout`, `switch`, `stash`, `reset` or `merge` in a
-  main checkout, never `git worktree add` by hand, never `EnterWorktree` with a
-  name. Unguarded repos are worked in directly unless the user asks for a
+  main checkout, never `git worktree add` by hand, never `EnterWorktree`: it
+  binds the session to one worktree, and Claude Code then refuses any shell
+  command it cannot prove stays inside it, in the session and its subagents.
+  Unguarded repos are worked in directly unless the user asks for a
   worktree.
 - **Inside a worktree:** it is yours alone; never touch other worktrees or the
   main checkout. If the branch is a placeholder (`…/claude-…`, `…/pi-…`,
@@ -3271,7 +3277,7 @@ _check_redirs() {
   return 1
 }
 _check_simple() {  # dir words_nl — prints rule\tpath, 0 if this simple command must be blocked
-  local dir=$1 in_mirror=0 r cmd0 gdir gd="" gcf="" gcg="" gcs="" verb nxt orig w sc="" st
+  local dir=$1 in_mirror=0 r cmd0 gdir gd="" gcf="" gcg="" gcs="" verb nxt orig w sc="" st skip=0
   r=$(guarded_main_of_path "$dir") && in_mirror=1
   local args=() redirs=()
   while IFS= read -r w; do
@@ -3311,7 +3317,7 @@ _check_simple() {  # dir words_nl — prints rule\tpath, 0 if this simple comman
   esac
   _cfg_writer "$cmd0" "$dir" "$@" && return 0
   # a version or help probe as the only argument runs nothing of the checkout's; its redirects are still judged below
-  case "$cmd0" in make|npm|node|pnpm|yarn|bun|uv|python|python3)
+  case "$cmd0" in make|npm|node|pnpm|yarn|bun|uv|python|python[0-9]*)
     [[ $# -eq 1 ]] && case "$1" in --version|-v|-V|--help|-h) cmd0=probe ;; esac ;;
   esac
   # their branches return early
@@ -3445,26 +3451,43 @@ _check_simple() {  # dir words_nl — prints rule\tpath, 0 if this simple comman
         esac
       done ;;
     npm)
-      case "$1" in i|install|ci|un|uninstall|update|pkg|link)
-        if [[ $in_mirror == 1 ]]; then _hit "a file-changing command" "$dir"; return 0; fi ;;
-      run|run-script|start|test|t|exec|x|restart)
-        if [[ $in_mirror == 1 ]]; then _hit "running a script, server or test" "$dir"; return 0; fi ;;
-      esac
-      _arg_in_mirror "running a mirror script by path" "$dir" "$@" && return 0 ;;
-    python|python3|perl)
-      case "$1" in -c|-m|-*e*)
-        if [[ $in_mirror == 1 ]]; then _hit "a file-changing command" "$dir"; return 0; fi ;;
-      -*) ;;
-      *) if [[ $in_mirror == 1 && $# -gt 0 ]]; then _hit "running a script, server or test" "$dir"; return 0; fi
-         _arg_in_mirror "running a mirror script by path" "$dir" "$@" && return 0 ;;
-      esac ;;
-    node)
-      case "$1" in -e)
-        if [[ $in_mirror == 1 ]]; then _hit "a file-changing command" "$dir"; return 0; fi ;;
-      -*) ;;
-      *) if [[ $in_mirror == 1 && $# -gt 0 ]]; then _hit "running a script, server or test" "$dir"; return 0; fi
-         _arg_in_mirror "running a mirror script by path" "$dir" "$@" && return 0 ;;
-      esac ;;
+      # the subcommand is the first word that is no option, and --prefix (or -C) names the project npm runs in; any
+      # other path is data handed to the script
+      sc=""
+      for nxt in "$@"; do
+        if [[ $skip == 1 ]]; then skip=0; _arg_in_mirror "running a mirror script by path" "$dir" "$nxt" && return 0; continue; fi
+        case "$nxt" in
+          --prefix|-C) skip=1 ;;
+          --prefix=*) _arg_in_mirror "running a mirror script by path" "$dir" "${nxt#*=}" && return 0 ;;
+          --) break ;;
+          -*) ;;
+          *) [[ -n "$sc" ]] || sc=$nxt ;;
+        esac
+      done
+      if [[ $in_mirror == 1 ]]; then
+        case "$sc" in
+          i|install|ci|un|uninstall|update|pkg|link) _hit "a file-changing command" "$dir"; return 0 ;;
+          run|run-script|start|test|t|exec|x|restart) _hit "running a script, server or test" "$dir"; return 0 ;;
+        esac
+      fi ;;
+    python|python[0-9]*|perl|node)
+      # the script is the first word that is neither an option nor an option's value. The words after it are its
+      # arguments, data: `x.py --repo <main>` reads the mirror, `python -u <main>/x.py` runs it (#15)
+      for nxt in "$@"; do
+        if [[ $skip == 1 ]]; then skip=0; continue; fi
+        case "$cmd0:$nxt" in
+          node:-e|node:-p|node:-pe|node:--eval|node:--print|p*:-c|p*:-m|p*:-[!-]*e*)   # code or a module, not a file
+            if [[ $in_mirror == 1 ]]; then _hit "a file-changing command" "$dir"; return 0; fi
+            break ;;
+          *:-) break ;;   # the script comes on stdin
+          # shortcut: only the common options that take a separate value; another one's value is read as the script
+          p*:-W|p*:-X|perl:-I|node:-r|node:--require|node:--import|node:--loader|node:--env-file|node:-C|node:--conditions) skip=1 ;;
+          *:-*) ;;
+          *) if [[ $in_mirror == 1 ]]; then _hit "running a script, server or test" "$dir"; return 0; fi
+             _arg_in_mirror "running a mirror script by path" "$dir" "$nxt" && return 0
+             break ;;
+        esac
+      done ;;
     bun|bunx|deno|tsx|ts-node|make|docker|docker-compose|terraform|tofu|ansible|ansible-playbook)
       if [[ $in_mirror == 1 ]]; then _hit "running a script, server or test" "$dir"; return 0; fi ;;
     uv) case "$1" in run) if [[ $in_mirror == 1 ]]; then _hit "running a script, server or test" "$dir"; return 0; fi ;; esac ;;

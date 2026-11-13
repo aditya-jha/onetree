@@ -408,6 +408,14 @@ guard_table "parser: from a worktree, a mirror path is judged as the mirror (git
   block "npm --prefix $MAIN run build"    block "sed -i '' s/a/b/ $MAIN/README.md" \
   block "find $MAIN -exec chmod u+w {} +" allow 'find . -exec chmod u+w {} +' \
   block "echo x | tee $MAIN/README.md"
+guard_table "parser: an interpreter is judged by the script it runs (the first word that is no option or option's value), npm by its subcommand and --prefix; the script's own arguments are data" "$ptree" \
+  allow "python3 tools/x.py --repo $MAIN" block "python3 -u $MAIN/x.py" \
+  block "node -r ./a.js $MAIN/script.js"  block "python3.12 $MAIN/x.py" \
+  block "npm --prefix=$MAIN run build"    allow "npm run build -- --out $MAIN/dist"
+guard_table "parser: in a mirror an option before the script or the npm subcommand hides neither; code on the command line and a version probe are judged as before" "$MAIN" \
+  block 'python3 -u manage.py runserver'  block 'node --inspect server.js' \
+  block 'npm --silent run build'          allow 'npm view react version' \
+  block "python3 -c 'print(1)'"           allow 'python3 --version'
 guard_table "parser: a build tool asked only for its version or help runs nothing; a target, ci, run, a second argument or a redirect is still judged" "$MAIN" \
   allow 'make --version'                  allow 'npm --version && node -v && pnpm --version && yarn -v && bun --version && uv --version && python3 --version && make -h' \
   block 'make build'                      block 'make' \
@@ -883,7 +891,7 @@ eq "lockIgnored off: the lock of the ignored set is undone" "$(modes node_module
   "node_modules:w node_modules/pkg2/i.js:w .husky/_:w .env:w src/x.log:w README.md:ro "
 $ONETREE init --no-guard "$WM" >/dev/null 2>&1
 
-# ---- sessions follow their worktree. A host fixes a session's folder at launch; after onetree new only Claude can follow, so onetree
+# ---- sessions follow their worktree. A host fixes a session's folder at launch; after onetree new only the Claude app can follow, so onetree
 # tells each agent how to work there, and the guard names the session's own worktree. Processes stand in for agents by their argv
 mkdir -p "$HOME/.claude"   # Claude is installed: a guarded mirror keeps the Claude app's own worktree folder creatable
 git clone -q origin.git cw-main 2>/dev/null; CW=$TMP/cw-main
@@ -901,7 +909,7 @@ while IFS='|' read -r pid envs re; do   # onetree new again on that worktree, as
   [[ "${got%%|*}" == "$hw" && "${got#*|}" =~ $re ]] || wrong+=" [$pid $envs => $got]"
 done <<EOF
 $HC|CLAUDE_CODE_ENTRYPOINT=claude-desktop|change_directory. with $hw .*the app's file pane, diff, terminal and PR card
-$HC|CLAUDE_CODE_ENTRYPOINT=cli|EnterWorktree. with path $hw
+$HC|CLAUDE_CODE_ENTRYPOINT=cli|prefix every command with .cd $hw &&. and edit by absolute path. Do not call .EnterWorktree.
 $HX|X=1|open a new thread on $hw
 $HY|X=1|type ./cd $hw.
 $HY|CLAUDE_CODE_ENTRYPOINT=claude-desktop|type ./cd $hw.
@@ -909,6 +917,9 @@ $HP|X=1|onetree's pi extension runs this session's commands in $hw
 $$|X=1|^none$
 EOF
 eq "new: stdout is the path, and the next step fits the agent that ran it (Claude app, Claude CLI, Codex app, Codex CLI, a Codex started from a Claude app shell, pi); a person gets none" "$wrong" ""
+chmod u-w "$CW/.git"; sb=$($ONETREE new sandboxed "$CW" 2>&1 || true); chmod u+w "$CW/.git"
+eq "new: where the main's .git cannot be written (a sandboxed agent session) it says so and how to start a session for the task, and makes nothing" \
+  "$(grep -c "cannot write $CW/.git, so no worktree can be made from here.*onetree launch --task sandboxed <agent>" <<<"$sb") $([[ -e "$TMP/cw-worktrees/cw-main/sandboxed" ]] && echo made || echo none)" "1 none"
 hc_out=$(jq -nc --arg cwd "$MAIN" '{name: "hc-a", cwd: $cwd}' | ONETREE_HOST=claude-app $ONETREE hook-create 2>"$TMP/hc-err")
 eq "hook-create: Claude's worktree in a registered repo is onetree's, and a hook prints no next step" "$hc_out $(grep -c '^onetree: next' "$TMP/hc-err")" "$TMP/worktrees/main/hc-a 0"
 b1=$(CLAUDE_CODE_SESSION_ID=s-bind ONETREE_SESSION_PID=$HC $ONETREE new bind-1 "$CW" 2>/dev/null)

@@ -1048,7 +1048,9 @@ host_of() {
   local p argv=""; p=${ONETREE_SESSION_PID:-$(agent_pid)}; AGENT=
   if [[ "$p" =~ ^[0-9]+$ ]]; then argv=$(ps -ww -o command= -p "$p" 2>/dev/null || true); agent_of "$(ps -o comm= -p "$p" 2>/dev/null || true)" "$argv"; fi
   # the walk ended at timeout, nice, make…
-  if [[ -z "$AGENT" ]]; then [[ "${CLAUDECODE:-}" == 1 ]] && AGENT=claude; [[ -n "${CODEX_THREAD_ID:-}" ]] && AGENT=codex; fi
+  # dsh gives each shell command it runs DSH_SESSION_ID, however dsh itself was started (`pnpm dsh web` is
+  # `node … apps/cli/src/bin.ts`: nothing in its argv says dsh). It is the innermost of the three, so it is asked last
+  if [[ -z "$AGENT" ]]; then [[ "${CLAUDECODE:-}" == 1 ]] && AGENT=claude; [[ -n "${CODEX_THREAD_ID:-}" ]] && AGENT=codex; [[ -n "${DSH_SESSION_ID:-}" ]] && AGENT=dsh; fi
   case "$AGENT" in
     claude) case "${CLAUDE_CODE_ENTRYPOINT:-}" in claude-desktop*) echo claude-app ;; claude-vscode*|*jetbrains*) echo claude-ide ;; sdk-*|mcp|*github-action*) echo claude-sdk ;; *) echo claude-cli ;; esac ;;
     codex) if [[ "$argv" == *" app-server"* ]]; then echo codex-app; else echo codex-cli; fi ;;
@@ -1061,7 +1063,7 @@ SKEY_SESSION=; SKEY_PID=; SKEY_START=
 # reused pid is another process). The Codex app-server and dsh's web server serve many sessions: no pid
 session_key() {
   SKEY_SESSION=; SKEY_PID=; SKEY_START=
-  case "$1" in claude-*) SKEY_SESSION=${CLAUDE_CODE_SESSION_ID:-} ;; codex-*) SKEY_SESSION=${CODEX_THREAD_ID:-} ;; ?*) SKEY_SESSION=${ONETREE_SESSION_ID:-} ;; esac
+  case "$1" in claude-*) SKEY_SESSION=${CLAUDE_CODE_SESSION_ID:-} ;; codex-*) SKEY_SESSION=${CODEX_THREAD_ID:-} ;; dsh) SKEY_SESSION=${ONETREE_SESSION_ID:-${DSH_SESSION_ID:-}} ;; ?*) SKEY_SESSION=${ONETREE_SESSION_ID:-} ;; esac
   case "$1" in ""|codex-app|dsh) return 0 ;; esac
   SKEY_PID=${ONETREE_SESSION_PID:-$(agent_pid)}; [[ "$SKEY_PID" =~ ^[0-9]+$ ]] || { SKEY_PID=; return 0; }
   SKEY_START=$(ps -o lstart= -p "$SKEY_PID" 2>/dev/null | tr -s ' ' || true)
@@ -3586,6 +3588,7 @@ block() {
   local h own where   # each step may fail without ending the guard early: any exit but 2 lets the call through
   # Claude sets agent_id only on a subagent's calls
   h=$(host_of) || h=; [[ -n "${aid:-}" && "$h" == claude-* ]] && h=claude-subagent
+  case "${agent:-}" in pi|dsh) h=$agent ;; esac   # its extension or plugin says who is asking: no guess from the process
   own=$(bound_worktrees "${sid:-}" "$([[ "$apid" == null ]] || echo "$apid")" "$2" | awk 'NR == 1') || own=
   if [[ -n "$own" ]]; then where="This session already has a worktree, $own: do it there. To work there, $(move_hint "$h" "$own" "$2")"
   else where="Work in a worktree instead: run \`onetree new <slug> $r\`, then $(move_hint "$h" "<path>" "$2")"; fi

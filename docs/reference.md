@@ -406,7 +406,11 @@ maps dsh's tools (bash with its `workdir`, write, edit, `str_replace_editor`)
 onto the shapes the guard reads and denies what it refuses. `onetree render
 pi|dsh` prints either file as install writes it. dsh counts as dsh however it
 is started: by its name, as the `@deepseek-ai/dsh` package, or from its source
-checkout (`node … deepseek-harness/apps/cli/src/bin.ts`).
+checkout (`node … deepseek-harness/apps/cli/src/bin.ts`). Where the process
+says nothing (`pnpm dsh web` is `node … apps/cli/src/bin.ts`), a guard call is
+dsh's because the plugin says so, and a shell command is dsh's because dsh
+gives it `DSH_SESSION_ID`. That id also binds a worktree made by `onetree new`
+to the dsh session, so a later refusal names it.
 
 ### Sessions
 

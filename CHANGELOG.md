@@ -9,6 +9,12 @@
   worktree what `onetree codex-grants` lists, through dsh's own per-session
   grant, for every profile. `codex-grants` prints nothing for a main checkout
   (it used to list `.git` itself). Run `onetree update` to rewrite the plugin.
+- dsh started as `pnpm dsh web` (`node … apps/cli/src/bin.ts`, a relative path
+  with no "dsh" in it) still got the generic next step in a refusal. The guard
+  now takes the agent from what the dsh plugin (or the pi extension) sends, and
+  `onetree new` run from a dsh shell command knows dsh by the `DSH_SESSION_ID`
+  dsh sets. The same id binds the new worktree to the dsh session, so a later
+  refusal says "this session already has a worktree" and names it.
 - dsh run from its source checkout (`node … deepseek-harness/apps/cli/src/bin.ts`,
   what `pnpm dsh` and a wrapper around it start) is recognised as dsh, so
   `onetree new` and the guard give it dsh's next step (`workdir`) where it got

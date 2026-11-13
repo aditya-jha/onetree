@@ -6,7 +6,7 @@ set -eo pipefail
 ONETREE=$(cd "$(dirname "$0")/.." && pwd -P)/bin/onetree
 TMP=$(cd "$(mktemp -d)" && pwd -P); trap 'chmod -R u+w "$TMP" 2>/dev/null; rm -rf "$TMP"' EXIT
 export HOME=$TMP ONETREE_CONFIG=$TMP/config ONETREE_EVENTS=$TMP/state/events.jsonl ONETREE_SESSIONS=$TMP/state/sessions ONETREE_SESSION_PID=$$ ONETREE_CACHE=$TMP/state/cache
-while IFS= read -r v; do unset "$v"; done < <(compgen -e | grep -E '^(CLAUDECODE$|CLAUDE_CODE_|CODEX_)' || true)   # run from inside an agent, the suite must not inherit its host
+while IFS= read -r v; do unset "$v"; done < <(compgen -e | grep -E '^(CLAUDECODE$|CLAUDE_CODE_|CODEX_|DSH_)' || true)   # run from inside an agent, the suite must not inherit its host
 export GIT_AUTHOR_NAME=onetree GIT_AUTHOR_EMAIL=onetree@test GIT_COMMITTER_NAME=onetree GIT_COMMITTER_EMAIL=onetree@test GIT_CONFIG_NOSYSTEM=1
 cd "$TMP"
 
@@ -916,9 +916,10 @@ $HY|X=1|type ./cd $hw.
 $HY|CLAUDE_CODE_ENTRYPOINT=claude-desktop|type ./cd $hw.
 $HP|X=1|onetree's pi extension runs this session's commands in $hw
 $HD|X=1|pass .workdir. $hw to every bash call
+$$|DSH_SESSION_ID=s-dsh-env|pass .workdir. $hw to every bash call
 $$|X=1|^none$
 EOF
-eq "new: stdout is the path, and the next step fits the agent that ran it (Claude app, Claude CLI, Codex app, Codex CLI, a Codex started from a Claude app shell, pi, dsh run from its source checkout); a person gets none" "$wrong" ""
+eq "new: stdout is the path, and the next step fits the agent that ran it (Claude app, Claude CLI, Codex app, Codex CLI, a Codex started from a Claude app shell, pi, dsh run from its source checkout, a dsh shell command known only by DSH_SESSION_ID); a person gets none" "$wrong" ""
 chmod u-w "$CW/.git"; sb=$($ONETREE new sandboxed "$CW" 2>&1 || true); chmod u+w "$CW/.git"
 eq "new: where the main's .git cannot be written (a sandboxed agent session) it says so and how to start a session for the task, and makes nothing" \
   "$(grep -c "cannot write $CW/.git, so no worktree can be made from here.*onetree launch --task sandboxed <agent>" <<<"$sb") $([[ -e "$TMP/cw-worktrees/cw-main/sandboxed" ]] && echo made || echo none)" "1 none"
@@ -941,6 +942,10 @@ jq -nc --arg cwd "$CW" '{name: "agent-aa31dba2ed770a65d", cwd: $cwd}' | CLAUDE_C
 sa=$({ jq -nc --arg cwd "$CW" '{tool_name: "Bash", cwd: $cwd, session_id: "s-bind", agent_id: "aa31dba2ed770a65d", tool_input: {command: "git stash"}}' | ONETREE_SESSION_PID=$HC ONETREE_HOST=claude-cli ONETREE_NO_EVENTS=1 $ONETREE guard >/dev/null; } 2>&1 || true)
 eq "subagents: an isolated subagent's worktree is never its parent session's, and a refused subagent is told to cd, not to move the session" \
   "$(grep -c "already has a worktree, $b2: do it there" <<<"$(refusal s-bind "$HC")") $(grep -c 'a subagent stays in the folder' <<<"$sa") $(grep -c 'EnterWorktree. with path' <<<"$sa")" "1 1 0"
+bd=$(DSH_SESSION_ID=s-dsh-bind $ONETREE new bind-dsh "$CW" 2>/dev/null)
+gd=$({ jq -nc --arg cwd "$CW" '{tool_name: "Bash", cwd: $cwd, session_id: "s-dsh-bind", agent: "dsh", tool_input: {command: "git stash"}}' | ONETREE_NO_EVENTS=1 $ONETREE guard >/dev/null; } 2>&1 || true)
+eq "dsh: a worktree made from a dsh shell command is bound to its session by DSH_SESSION_ID, and a refusal its plugin asks for names that worktree with dsh's next step, whatever process dsh runs as" \
+  "$(grep -c "already has a worktree, $bd: do it there. To work there, pass .workdir. $bd to every bash call" <<<"$gd")" "1"
 kill $HC $HX $HY $HP $HD 2>/dev/null; wait $HC $HX $HY $HP $HD 2>/dev/null || true
 eq "session hint and rules: each host is told its own way in" \
   "$(cd "$CW" && ONETREE_HOST=claude-app $ONETREE session </dev/null | grep -c 'call `change_directory` with <path>') $(cd "$CW" && ONETREE_HOST=codex-cli $ONETREE session </dev/null | grep -c 'type `/cd <path>`') $($ONETREE rules | grep -cE '`change_directory` with the path|`/cd <worktree>`') $($ONETREE snippet "$CW" | grep -c 'Claude desktop app: call `change_directory`')" "1 1 2 1"

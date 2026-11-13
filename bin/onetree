@@ -1029,7 +1029,8 @@ agent_of() {
   esac
   case "$argv" in
     *"/pi/"*|*"/bin/pi "*|*" pi "*) AGENT=pi ;;
-    *"/dsh/"*|*"/bin/dsh "*|*" dsh "*|*"@deepseek-ai/dsh"*) AGENT=dsh ;;
+    # …/deepseek-harness/apps/cli/: dsh run from its source checkout (`pnpm dsh`, a wrapper that execs node on it)
+    *"/dsh/"*|*"/bin/dsh "*|*" dsh "*|*"@deepseek-ai/dsh"*|*"/deepseek-harness/apps/cli/"*) AGENT=dsh ;;
     *"/codex/"*|*"/bin/codex "*) AGENT=codex ;;
     *"/claude-code/"*|*"/.claude/"*|*"/bin/claude "*) AGENT=claude ;;
   esac
@@ -2505,7 +2506,8 @@ write_pi_extension() {  # ~/.pi/agent/extensions/onetree.ts
 }
 # the dsh plugin: onetree's guard before each tool call, with dsh's tools mapped onto the shapes it reads (a bash
 # workdir is where the command is judged), and the session hint when a session starts. dsh lets a plugin allow or deny,
-# never rewrite
+# never rewrite. Its workspace-write sandbox keeps a worktree's git directory read-only, as Codex's does, but takes
+# grants while it runs: a session in a worktree is granted what codex_grants lists, so no launch flag is needed
 render_dsh_plugin() {
   local t
   t=$(cat <<'DSHPLUGIN'
@@ -2534,8 +2536,24 @@ function where(agent) {
   return { cwd: header.cwd || process.cwd(), session_id: header.id || "" };
 }
 
+// a grant lasts for the live session, so it is made once per session object: again after a resume or a restart
+let policy = null;
+const granted = new WeakSet();
+function grant(agent) {
+  const session = agent && agent.session;
+  if (!policy || !session || granted.has(session)) return;
+  granted.add(session);
+  const cwd = where(agent).cwd;
+  for (const dir of String(run(["codex-grants", cwd], "", cwd).stdout || "").split("\n")) {
+    if (dir && dir !== "--add-dir") { try { policy.registerWritableRoot(session, dir); } catch (e) { /* the sandbox refuses it: the commit fails as before */ } }
+  }
+}
+
 export function apply(ctx) {
+  // the sandbox policy is not in every profile: the guard must load without it
+  if (ctx.inject) ctx.inject(["sandboxPolicy"], scope => { policy = scope.sandboxPolicy; });
   ctx.on("tools/pre-execute", async (exec, next) => {
+    grant(exec.agent);
     const call = shape(exec.name, exec.arguments);
     if (!call) return next();
     const w = where(exec.agent);
@@ -2544,6 +2562,7 @@ export function apply(ctx) {
     return { kind: "deny", reason: String(r.stderr || (r.error && r.error.message) || "onetree guard unavailable").trim() };
   });
   ctx.on("agent/session-start", ({ agent }) => {
+    grant(agent);
     const w = where(agent);
     const text = String(run(["session"], JSON.stringify({ ...w, agent: "dsh" }), w.cwd).stdout || "").trim();
     if (text && agent && agent.inject) {
@@ -2569,6 +2588,7 @@ codex_grants() {
   local c g b x r
   c=$(git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 0
   g=$(git -C "$1" rev-parse --path-format=absolute --git-dir 2>/dev/null) || return 0
+  [[ "$g" != "$c" ]] || return 0   # a main checkout: its git dir is .git itself, which is never granted
   printf '%s\n%s\n%s\n%s\n' --add-dir "$c/objects" --add-dir "$g"
   b=$(git -C "$1" symbolic-ref -q HEAD 2>/dev/null || true)
   if [[ "$b" == refs/heads/*/* ]]; then for x in "$c/${b%/*}" "$c/logs/${b%/*}"; do mkdir -p "$x" 2>/dev/null && printf '%s\n%s\n' --add-dir "$x"; done; fi

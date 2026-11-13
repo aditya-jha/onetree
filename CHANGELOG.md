@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- A sandboxed dsh can commit in its worktree. dsh's `workspace-write` sandbox
+  (the headless default) kept the worktree's git directory read-only, so
+  `git commit` failed on `index.lock`; onetree granted those folders to Codex
+  at launch and to dsh not at all. The dsh plugin now grants a session in a
+  worktree what `onetree codex-grants` lists, through dsh's own per-session
+  grant, for every profile. `codex-grants` prints nothing for a main checkout
+  (it used to list `.git` itself). Run `onetree update` to rewrite the plugin.
+- dsh run from its source checkout (`node … deepseek-harness/apps/cli/src/bin.ts`,
+  what `pnpm dsh` and a wrapper around it start) is recognised as dsh, so
+  `onetree new` and the guard give it dsh's next step (`workdir`) where it got
+  the generic one, or Claude's when started from a Claude shell.
+
 - Claude CLI, IDE and SDK sessions are no longer told to call `EnterWorktree`
   after `onetree new`; like every other agent they prefix commands with
   `cd <worktree> &&` and edit by absolute path, and the rules say never to

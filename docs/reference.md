@@ -388,7 +388,7 @@ agent's global instructions. It tells every agent to:
 - run `onetree info` to learn a repo's rules, and ask before onboarding a new one;
 - in a guarded repo, run `onetree new <slug>` and work only in the printed
   path, stating it in the first reply, never switching branches in the mirror;
-- rename placeholder branches like `feature/claude-…` before the first push;
+- rename placeholder branches like `feature/claude-…` (for a dsh web session, `feature/dsh-<hash>`) before the first push;
 - ship through a PR into the integration branch, fetch before every commit and
   push, never force-push, and say "worktree `<path>` is done" when the PR
   merges.
@@ -426,14 +426,31 @@ call in the session's working directory unless the call names a `workdir`.
 `onetree auto <agent>` with a session id in the environment
 (`ONETREE_SESSION_ID`, else `DSH_SESSION_ID`) binds the worktree to that
 session and, asked again for the same session, prints the worktree it has
-instead of making another; a subagent's session shares its parent's. Without
-an id (the shell wrappers) every call makes a new one. A session's worktree
-is named `<agent>-<date>-<time>-<hash of the session id>`; a name whose folder
-or branch already exists is never reused for it (the next of five names is
-taken, then `auto` fails), so two sessions never share one. The plugin grants
-before it moves: if the grants cannot all be made, the session is not moved,
-holds none of them, is told where its worktree is and why it is closed, and
-the plugin tries again before each tool call. If `auto` fails, the
+instead of making another. Without
+an id (the shell wrappers) every call makes a new one, named by the time.
+
+Three rules hold for a session-bound worktree:
+
+- **One session, one worktree, by name.** It is named `<agent>-<hash of the
+  session id>` (branch `<prefix>dsh-<hash>`, a placeholder like the wrappers'
+  `<prefix>dsh-<date>-<time>`: rename it before the first push). `auto` makes
+  it under a lock per name, as a new folder on a new branch and nothing else;
+  a second call for the same session, also one made while the first is still
+  in bootstrap, waits and prints the same worktree. A folder, a local branch
+  or a remote branch of that name that was not made for this session is a
+  failure that says so, never a reuse.
+- **Only a subagent inherits.** A session dsh marks `origin: "subagent"`
+  works in its parent's worktree. A fork is its own session with its own.
+- **No call runs in a worktree the sandbox has not fully opened.** The
+  plugin moves a session only after every grant was made (`onetree
+  codex-grants` exits non-zero when a folder it must list cannot be
+  prepared). While they cannot be made, a first time or after a resume (the
+  working directory persists, the grants do not), the session is told where
+  its worktree is and why it is closed, each tool call first tries again, and
+  a call whose working directory or target is inside the worktree is denied
+  with the reason.
+
+If `auto` fails, the
 session stays in the main checkout, still guarded, and the message says what
 failed. In a profile without dsh's `workingDirectory` service the worktree is
 still made and the session is told to pass `workdir`; without `sandboxPolicy`

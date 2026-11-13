@@ -19,11 +19,17 @@
   moves the session's working directory there and tells it once; the guard
   judges a call in that working directory. It does this at startup, resume,
   clear and compact. `onetree auto <agent>` with `ONETREE_SESSION_ID` (else
-  `DSH_SESSION_ID`) set binds the worktree to that session and returns the
-  same one when asked again, and never gives a session a folder or branch
-  that already exists; the shell wrappers are unchanged. The plugin moves a
-  session only after every grant is made, and retries before each tool call
-  until then. The plugin's
+  `DSH_SESSION_ID`) set makes the one worktree that session can have, named
+  `<agent>-<hash of the session id>` (so its placeholder branch is
+  `<prefix>dsh-<hash>`), under a lock: asked again, also while the first call
+  is still running, it prints the same one, and a folder or branch of that
+  name it did not make for the session is a failure, never a reuse. The shell
+  wrappers are unchanged. Only a session dsh marks as a subagent works in its
+  parent's worktree; a fork gets its own. The plugin moves a session only
+  after every grant is made, and until then denies, with the reason, a call
+  that would run in the worktree. `onetree codex-grants` now exits non-zero
+  when a folder it must list cannot be prepared (it used to skip it and exit
+  0). The plugin's
   session hint had never been shown: it listened to `agent/session-start`,
   which dsh does not emit (the event is `agent/created`). The hint and a
   refusal now say "this session works in <worktree>" once it is moved, and no

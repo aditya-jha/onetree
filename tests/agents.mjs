@@ -96,6 +96,7 @@ async function dsh(opts = {}) {
   const call = async (name, args, agent = { session: { header: { cwd: mirror, id: "dsh-1" } } }) => {
     let passed = false;
     const r = await on["tools/pre-execute"]({ name, arguments: args, agent }, async () => { passed = true; return { kind: "allow" }; });
+    host.reason = passed ? "" : String(r.reason || "");
     return passed ? "allow" : r.kind;
   };
   return Object.assign(host, { mod, on, call, grants, moves, session, created });
@@ -144,9 +145,13 @@ const gitDirs = (host, id) => host.grants.filter(g => g[0] === id).map(g => g[1]
   const grantsBefore = host.grants.length;
   const again = await host.created(host.session("dsh-web"), "resume");
   out.dshResume = { made: trees() - before, moves: host.moves.length, regranted: host.grants.slice(grantsBefore).some(g => g[1] === tree), injected: again.injected.length, plain: await host.call("bash", { command: "git stash" }, again) };
-  // a subagent's session starts in its parent's folder: it shares the parent's worktree
-  const child = await host.created(host.session("dsh-child", mirror, { parentSession: "dsh-web" }));
+  // a subagent's session (dsh marks it with origin) starts in its parent's folder: it shares the parent's worktree
+  const child = await host.created(host.session("dsh-child", mirror, { parentSession: "dsh-web", origin: "subagent" }));
   out.dshChild = { made: trees() - before, moved: host.moves.slice(1), ...about(child) };
+  // a fork can carry its source's id as parentSession too, and is a session of its own: its own worktree
+  await host.created(host.session("dsh-fork", mirror, { parentSession: "dsh-web" }));
+  const forked = (host.moves.find(m => m[0] === "dsh-fork") || [])[1] || "";
+  out.dshFork = { made: trees() - before, own: forked !== "" && forked !== tree, granted: host.grants.some(g => g[0] === "dsh-fork" && g[1] === forked) };
 }
 // dsh: `auto` fails (here an onetree whose `auto dsh` fails, and is itself in every other call): the session stays, is told why, and is still guarded
 {
@@ -181,6 +186,10 @@ const gitDirs = (host, id) => host.grants.filter(g => g[0] === id).map(g => g[1]
     close(host);
     const agent = await host.created(host.session(id));
     const before = { moves: host.moves.length, grants: host.grants.length, injected: agent.injected.map(m => m.text), plain: await host.call("bash", { command: "git stash" }, agent) };
+    // not moved, so a read in the main checkout runs; a call sent into the closed worktree is refused with the reason, not left to the sandbox
+    const closed = (/worktree, ([^,]+), could not be opened/.exec(before.injected[0] || "") || [])[1] || "";
+    before.read = await host.call("bash", { command: "ls" }, agent);
+    before.inTree = [await host.call("bash", { command: "ls", workdir: closed }, agent), host.reason];
     open(host);
     const after = await host.call("bash", { command: "git stash" }, agent);
     const tree = (host.moves[0] || [])[1] || "";
@@ -191,6 +200,26 @@ const gitDirs = (host, id) => host.grants.filter(g => g[0] === id).map(g => g[1]
     empty: await stuck("dsh-grants-empty", () => writeFileSync(flag, "empty"), () => rmSync(flag)),
     refused: await stuck("dsh-grant-refused", host => { host.refuse = dir => dir.endsWith("/objects"); }, host => { host.refuse = () => false; }),
   };
+}
+// dsh: a resumed session's working directory is still in its worktree, and its grants are gone: while they cannot be made again every call
+// there is refused with the reason (a read too: nothing runs in a worktree that is not open), and the first call after they can be passes
+{
+  const flag = join(process.env.HOME, "codex-grants-mode");
+  const host = await dsh({ onetree: join(process.env.HOME, "onetree-grants-fail") });
+  await host.created(host.session("dsh-resume-closed"));
+  const tree = (host.moves[0] || [])[1] || "";
+  writeFileSync(flag, "fail");
+  const agent = await host.created(host.session("dsh-resume-closed"), "resume");
+  const held = host.grants.length;
+  out.dshResumeClosed = {
+    tree, injected: agent.injected.map(m => m.text),
+    bash: [await host.call("bash", { command: "git status" }, agent), host.reason],
+    read: await host.call("read", { file_path: "README.md" }, agent),
+    newGrants: host.grants.length - held,
+  };
+  rmSync(flag);
+  out.dshResumeClosed.after = await host.call("bash", { command: "git stash" }, agent);
+  out.dshResumeClosed.granted = host.grants.length - held;
 }
 // dsh: a profile with no sandbox policy has no sandbox to open: the session is moved all the same
 {

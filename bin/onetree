@@ -1382,16 +1382,8 @@ cmd_new() {
     [[ ! -e "$path" ]] || die "$path exists; carry needs a new slug"
     ! git -C "$main" show-ref -q --verify "refs/heads/$branch" || die "branch $branch exists; carry needs a new slug"
   fi
-  # auto for a session: a new worktree on a new branch. cmd_auto picks a free name; this is the same rule against a
-  # second session picking it in the same moment, so no branch below reuses a folder or a branch for it
-  if [[ -n "${AUTO_SESSION:-}" ]]; then
-    [[ ! -e "$path" ]] || die "$path exists; auto never gives a session a worktree that is already there"
-    ! git -C "$main" show-ref -q "$branch" || die "branch $branch exists; auto never gives a session a branch that is already there"
-  fi
   # who moves in; never the caller of auto or a launcher
   local h=""; case "$ONETREE_CMD" in new|carry|hook-create) h=$(host_of) ;; esac; session_key "$h"
-  # auto for a host that named the session (the dsh plugin): bound to that session, never to a process
-  [[ -n "${AUTO_SESSION:-}" ]] && { h=$AUTO_AGENT; SKEY_SESSION=$AUTO_SESSION; SKEY_PID=; SKEY_START=; }
   if [[ -d "$path" ]]; then
     git -C "$main" worktree list --porcelain | grep -qx "worktree $path" || die "$path exists but is not a worktree of $repo"
     if ! bootstrap "$main" "$path"; then die "bootstrap failed in $path (worktree kept; retry the same slug)"; fi
@@ -2027,26 +2019,70 @@ claude_trust_worktree() {
   if t=$(mktemp "$f.XXXXXX") && jq --arg p "$2" '.projects[$p].hasTrustDialogAccepted = true' "$f" > "$t" && mv "$t" "$f"; then return 0; fi
   rm -f "${t:-}"; return 0
 }
+# lock-dir — taken by whoever makes it (mkdir is atomic), waited for by everyone else. A lock whose holder died is
+# taken over, by one taker at a time; one made a moment ago has a holder that has not written its pid yet
+auto_lock() {
+  local l=$1 h
+  while ! mkdir "$l" 2>/dev/null; do
+    h=$(cat "$l/holder" 2>/dev/null || true)
+    if { [[ -n "$h" ]] && ! kill -0 "$h" 2>/dev/null; } || { [[ -z "$h" ]] && [[ $(( $(date +%s) - $(mtime "$l") )) -ge 60 ]]; }; then
+      if mkdir "$l.takeover" 2>/dev/null; then
+        [[ "$(cat "$l/holder" 2>/dev/null || true)" == "$h" ]] && rm -rf "$l"   # still the dead one's, now that we are the taker
+        rmdir "$l.takeover"; continue
+      fi
+    fi
+    sleep 1
+  done
+  printf '%s\n' "$$" > "$l/holder"
+}
+# main agent session — one session, one worktree, by name (docs/design/dsh-session-worktree.md): <agent>-<hash of the
+# session id>, so the same session is always asked about the same folder and branch, and one call at a time decides
+# (the lock is held from the first look to the finished worktree). It makes a new folder on a new branch and nothing
+# else: this is not cmd_new, which resumes a branch or reuses a folder of the name it is given. A folder or a branch
+# of that name that was not made here for this session is refused, never taken
+auto_session() {
+  local main=$1 agent=$2 s=$3 repo slug branch path int lock
+  repo=$(basename "$main"); slug="$agent-$(printf '%s' "$s" | git hash-object --stdin | cut -c1-12)"
+  branch="$(prefix_of "$main")$slug"; path="$(root_of "$main")/$repo/$slug"; int=$(integration "$main")
+  [[ -w "$main/.git" ]] || die "auto: cannot write $main/.git, so no worktree can be made for this session"
+  lock="$(_git_dir "$main")/onetree-auto-$slug.lock"; auto_lock "$lock"
+  # shellcheck disable=SC2064  # the lock's path is fixed now, on purpose
+  trap "rm -rf $(printf %q "$lock")" EXIT; trap 'exit 143' INT TERM HUP
+  if [[ -e "$path" ]]; then
+    # mine: the event this function wrote before making it names this session, and git lists it as a worktree here
+    bound_worktrees "$s" "" "$main" | grep -qxF "$path" && git -C "$main" worktree list --porcelain | grep -qxF "worktree $path" ||
+      die "auto: $path exists and was not made for this session, so it is not used; remove or rename it"
+    # made for it, but the call that made it died before it was ready: finish that one
+    if [[ ! -f "$(_git_dir "$path")/onetree" ]]; then
+      bootstrap "$main" "$path" || die "auto: bootstrap failed in $path (worktree kept; it is tried again when the session starts or resumes)"
+      mark_ours "$path"; claude_trust_worktree "$main" "$path"
+    fi
+    rm -rf "$lock"; echo "$path"; return 0
+  fi
+  remotes_resolve "$main"
+  git -C "$main" fetch -q "$RB"; [[ "$RP" == "$RB" ]] || git -C "$main" fetch -q "$RP"
+  # after the fetch, so a branch of this name on a remote is seen too: local or remote, it is somebody's work
+  ! git -C "$main" show-ref -q "$branch" || die "auto: a branch $branch exists (here or on a remote) and was not made for this session, so no worktree was made; remove or rename it"
+  # who it is for, before it exists: from here on the folder at this path is this session's
+  log_event new "path=$path" "repo=$repo" "branch=$branch" "resumed:=false" "agent=$agent" "host=$agent" "session=$s" "pid:=null" "pidStart="
+  mkdir -p "$(dirname "$path")"
+  if [[ "$RP" == "$RB" ]]; then git -C "$main" -c checkout.workers=0 worktree add -q --no-track -b "$branch" "$path" "$RB/$int"
+  else git -C "$main" -c checkout.workers=0 worktree add -q --track -b "$branch" "$path" "$RB/$int"; git -C "$main" config "branch.$branch.pushRemote" "$RP"; fi
+  if ! bootstrap "$main" "$path"; then
+    git -C "$main" worktree remove --force "$path" 2>/dev/null || true
+    git -C "$main" worktree prune; git -C "$main" branch -q -D "$branch" 2>/dev/null || true
+    die "bootstrap failed; rolled back new worktree $path"
+  fi
+  mark_ours "$path"; claude_trust_worktree "$main" "$path"
+  rm -rf "$lock"; echo "$path"
+}
 cmd_auto() {
   local agent=${1:?agent}; local m; m=$(guarded_main_of_path "$PWD") || exit 1
   [[ "$agent" == --check ]] && { basename "$m"; exit 0; }
-  # a host that serves many sessions (dsh web, through its plugin) names the one asking: the worktree is bound to it
-  # as `new` binds one, and asked again (a resume, a compaction) it gets the worktree it has, not a second
-  local s=${ONETREE_SESSION_ID:-${DSH_SESSION_ID:-}} own=""
-  [[ -z "$s" ]] || own=$(bound_worktrees "$s" "" "$m" | awk 'NR == 1')
-  [[ -z "$own" ]] || { echo "$own"; return 0; }
-  local slug; slug="$agent-$(date +%y%m%d-%H%M%S)"
-  if [[ -n "$s" ]]; then
-    # two sessions of one server can ask in the same second: a hash of the session's id keeps their names apart. A name
-    # that is taken all the same (its folder or its branch is there, here or on a remote) is never reused: that would
-    # put two sessions in one worktree, or hand this one another's commits
-    local base dir n=1; base="$slug-$(printf '%s' "$s" | git hash-object --stdin | cut -c1-10)"; slug=$base; dir="$(root_of "$m")/$(basename "$m")"
-    while [[ -e "$dir/$slug" ]] || git -C "$m" show-ref -q "$(prefix_of "$m")$slug"; do
-      n=$((n+1)); [[ $n -le 5 ]] || die "auto: $dir/$base and the next 4 names after it are taken, so no worktree was made for this session"
-      slug="$base-$n"
-    done
-  fi
-  AUTO_SESSION=$s AUTO_AGENT=$agent cmd_new "$slug" "$m"
+  # a host that serves many sessions (dsh web, through its plugin) names the one asking
+  local s=${ONETREE_SESSION_ID:-${DSH_SESSION_ID:-}}
+  if [[ -n "$s" ]]; then auto_session "$m" "$agent" "$s"; return 0; fi
+  cmd_new "$agent-$(date +%y%m%d-%H%M%S)" "$m"
 }
 
 # ---- registry and per-project behaviour
@@ -2573,6 +2609,7 @@ render_dsh_plugin() {
 import { execFile, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
+import { resolve } from "node:path";
 
 const ONETREE = "@ONETREE@";
 const AUTO_MINUTES = 10;   // a worktree's bootstrap (a dependency install) can take minutes
@@ -2599,7 +2636,8 @@ export function shape(tool, a) {
 }
 
 // a subagent's session starts in its parent's folder and works in its parent's worktree: onetree knows both by the
-// parent's id. shortcut: kept in memory, so a subagent of a subagent resumed alone after a restart gets a worktree of
+// parent's id. Only a subagent (dsh marks it with origin): a fork can carry parentSession too, and is its own session
+// with its own worktree. shortcut: kept in memory, so a subagent of a subagent resumed alone after a restart gets a worktree of
 // its own; walk the stored sessions if that shows up
 const owners = new Map();
 function where(agent) {
@@ -2639,14 +2677,14 @@ function grant(agent) {
   granted.add(session);
   return "";
 }
+const inside = (path, tree) => path === tree || String(path).startsWith(tree + "/");
 // grants first, then the move: a session is moved only into a worktree its sandbox lets it write and commit in.
 // -> "" or why the session's worktree is not open to it
 async function place(agent, signal) {
   const failed = grant(agent), tree = agent && agent.session && trees.get(agent.session);
   if (failed || !tree || !directory) return failed;
   try {   // already somewhere in it (a resume, a subagent placed by its parent): left there
-    const at = String(directory.get(agent.session));
-    if (at !== tree && !at.startsWith(tree + "/")) await directory.set(agent, tree, signal);
+    if (!inside(String(directory.get(agent.session)), tree)) await directory.set(agent, tree, signal);
   } catch (e) { /* not moved: the hint says to pass workdir */ }
   return "";
 }
@@ -2656,7 +2694,7 @@ async function settle(agent, signal) {
   const session = agent && agent.session;
   if (!session) return;
   const header = session.header || {};
-  if (header.parentSession) owners.set(header.id, owners.get(header.parentSession) || header.parentSession);
+  if (header.origin === "subagent" && header.parentSession) owners.set(header.id, owners.get(header.parentSession) || header.parentSession);
   const w = where(agent);
   let failed = "";
   if (run(["auto", "--check"], "", w.cwd).status === 0) {
@@ -2669,9 +2707,10 @@ async function settle(agent, signal) {
       failed = "onetree: could not make a worktree for this session (" + why + "), so it stays in " + w.cwd + ", the read-only main checkout.";
     }
   }
-  const closed = await place(agent, signal);
-  if (closed && trees.get(session)) failed = "onetree: this session's worktree exists at " + trees.get(session) + " but could not be opened in dsh's sandbox (" + closed + "), so the session was not moved there. onetree tries again before each tool call.";
-  const text = String(run(["session"], JSON.stringify({ ...w, cwd: (await here(agent, signal)).cwd, agent: "dsh" }), w.cwd).stdout || "").trim();
+  const closed = await place(agent, signal), tree = trees.get(session), at = (await here(agent, signal)).cwd;
+  // a resumed session's working directory is still in its worktree, and its grants are not: both states are said as they are
+  if (closed && tree) failed = "onetree: this session's worktree, " + tree + ", could not be opened in dsh's sandbox (" + closed + "). " + (inside(at, tree) ? "Its working directory is there, and tool calls there are refused until it is opened" : "The session was not moved there, and tool calls there are refused until it is opened") + "; onetree tries again before each tool call.";
+  const text = String(run(["session"], JSON.stringify({ ...w, cwd: at, agent: "dsh" }), w.cwd).stdout || "").trim();
   if ((failed || text) && agent.inject) {
     agent.inject(Object.freeze({ id: randomUUID(), role: "user", content: [{ type: "text", text: [failed, text].filter(Boolean).join("\n") }], source: { kind: "plugin", plugin: "onetree" } }));
   }
@@ -2684,10 +2723,17 @@ export function apply(ctx) {
     ctx.inject(["workingDirectory"], scope => { directory = scope.workingDirectory; });
   }
   ctx.on("tools/pre-execute", async (exec, next) => {
-    await place(exec.agent, exec.signal);
+    const closed = await place(exec.agent, exec.signal);
     const call = shape(exec.name, exec.arguments);
-    if (!call) return next();
     const w = await here(exec.agent, exec.signal);
+    if (closed) {
+      // no call runs in a worktree the sandbox has not opened: the sandbox would fail it halfway, with no reason given
+      const tree = trees.get(exec.agent.session) || where(exec.agent).cwd, target = call && (call.tool_input.workdir || call.tool_input.file_path);
+      if (inside(w.cwd, tree) || (target && inside(resolve(w.cwd, String(target)), tree))) {
+        return { kind: "deny", reason: "onetree: the worktree " + tree + " is not open in dsh's sandbox yet (" + closed + "), so nothing is run there. onetree tries again before each tool call; if this keeps failing, tell the user." };
+      }
+    }
+    if (!call) return next();
     const r = run(["guard"], JSON.stringify({ ...call, ...w, agent: "dsh" }), w.cwd);
     if (r.status === 0) return next();
     return { kind: "deny", reason: String(r.stderr || (r.error && r.error.message) || "onetree guard unavailable").trim() };
@@ -2709,19 +2755,21 @@ DSHPLUGIN
 CODEX_GIT="'fetch.writefetchhead=false' 'maintenance.auto=false' 'gc.auto=0'"
 # worktree — the --add-dir arguments, one word per line; a directory that will hold refs is created now
 codex_grants() {
-  local c g b x r
+  local c g b x r rc=0
   c=$(git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 0
   g=$(git -C "$1" rev-parse --path-format=absolute --git-dir 2>/dev/null) || return 0
   [[ "$g" != "$c" ]] || return 0   # a main checkout: its git dir is .git itself, which is never granted
   printf '%s\n%s\n%s\n%s\n' --add-dir "$c/objects" --add-dir "$g"
   b=$(git -C "$1" symbolic-ref -q HEAD 2>/dev/null || true)
-  if [[ "$b" == refs/heads/*/* ]]; then for x in "$c/${b%/*}" "$c/logs/${b%/*}"; do mkdir -p "$x" 2>/dev/null && printf '%s\n%s\n' --add-dir "$x"; done; fi
+  # a directory that cannot be made is a grant missing: the rest is still listed, but the exit says the list is short
+  if [[ "$b" == refs/heads/*/* ]]; then for x in "$c/${b%/*}" "$c/logs/${b%/*}"; do _grant_dir "$x" || rc=1; done; fi
   while IFS= read -r r; do
     [[ -n "$r" ]] || continue
-    for x in "$c/refs/remotes/$r" "$c/logs/refs/remotes/$r"; do mkdir -p "$x" 2>/dev/null && printf '%s\n%s\n' --add-dir "$x"; done
+    for x in "$c/refs/remotes/$r" "$c/logs/refs/remotes/$r"; do _grant_dir "$x" || rc=1; done
   done < <(git -C "$1" remote 2>/dev/null)
-  return 0
+  return $rc
 }
+_grant_dir() { mkdir -p "$1" 2>/dev/null && [[ -d "$1" ]] && { printf '%s\n%s\n' --add-dir "$1"; return 0; }; printf 'onetree: codex-grants: cannot prepare %s\n' "$1" >&2; return 1; }
 # seconds command… — killed after that long (macOS has no timeout)
 bounded() { perl -e 'alarm shift @ARGV; exec { $ARGV[0] } @ARGV or exit 127' "$@"; }
 YSTART='# onetree:start (managed by `onetree install`; edits inside are overwritten)'; YEND='# onetree:end'

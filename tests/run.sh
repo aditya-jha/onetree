@@ -900,6 +900,7 @@ $ONETREE init --guard --root "$TMP/cw-worktrees" "$CW" >/dev/null 2>&1
 ( exec -a "codex app-server --listen stdio://" sleep 60 ) & HX=$!
 ( exec -a codex sleep 60 ) & HY=$!
 ( exec -a pi sleep 60 ) & HP=$!
+( exec -a "node --import tsx/esm /src/deepseek-harness/apps/cli/src/bin.ts web" sleep 60 ) & HD=$!   # dsh run from its source checkout
 sleep 0.3
 hw=$($ONETREE new host-a "$CW" 2>/dev/null)
 wrong=""
@@ -914,9 +915,10 @@ $HX|X=1|open a new thread on $hw
 $HY|X=1|type ./cd $hw.
 $HY|CLAUDE_CODE_ENTRYPOINT=claude-desktop|type ./cd $hw.
 $HP|X=1|onetree's pi extension runs this session's commands in $hw
+$HD|X=1|pass .workdir. $hw to every bash call
 $$|X=1|^none$
 EOF
-eq "new: stdout is the path, and the next step fits the agent that ran it (Claude app, Claude CLI, Codex app, Codex CLI, a Codex started from a Claude app shell, pi); a person gets none" "$wrong" ""
+eq "new: stdout is the path, and the next step fits the agent that ran it (Claude app, Claude CLI, Codex app, Codex CLI, a Codex started from a Claude app shell, pi, dsh run from its source checkout); a person gets none" "$wrong" ""
 chmod u-w "$CW/.git"; sb=$($ONETREE new sandboxed "$CW" 2>&1 || true); chmod u+w "$CW/.git"
 eq "new: where the main's .git cannot be written (a sandboxed agent session) it says so and how to start a session for the task, and makes nothing" \
   "$(grep -c "cannot write $CW/.git, so no worktree can be made from here.*onetree launch --task sandboxed <agent>" <<<"$sb") $([[ -e "$TMP/cw-worktrees/cw-main/sandboxed" ]] && echo made || echo none)" "1 none"
@@ -939,7 +941,7 @@ jq -nc --arg cwd "$CW" '{name: "agent-aa31dba2ed770a65d", cwd: $cwd}' | CLAUDE_C
 sa=$({ jq -nc --arg cwd "$CW" '{tool_name: "Bash", cwd: $cwd, session_id: "s-bind", agent_id: "aa31dba2ed770a65d", tool_input: {command: "git stash"}}' | ONETREE_SESSION_PID=$HC ONETREE_HOST=claude-cli ONETREE_NO_EVENTS=1 $ONETREE guard >/dev/null; } 2>&1 || true)
 eq "subagents: an isolated subagent's worktree is never its parent session's, and a refused subagent is told to cd, not to move the session" \
   "$(grep -c "already has a worktree, $b2: do it there" <<<"$(refusal s-bind "$HC")") $(grep -c 'a subagent stays in the folder' <<<"$sa") $(grep -c 'EnterWorktree. with path' <<<"$sa")" "1 1 0"
-kill $HC $HX $HY $HP 2>/dev/null; wait $HC $HX $HY $HP 2>/dev/null || true
+kill $HC $HX $HY $HP $HD 2>/dev/null; wait $HC $HX $HY $HP $HD 2>/dev/null || true
 eq "session hint and rules: each host is told its own way in" \
   "$(cd "$CW" && ONETREE_HOST=claude-app $ONETREE session </dev/null | grep -c 'call `change_directory` with <path>') $(cd "$CW" && ONETREE_HOST=codex-cli $ONETREE session </dev/null | grep -c 'type `/cd <path>`') $($ONETREE rules | grep -cE '`change_directory` with the path|`/cd <worktree>`') $($ONETREE snippet "$CW" | grep -c 'Claude desktop app: call `change_directory`')" "1 1 2 1"
 ln -s "$b1" "$TMP/b1-link"
@@ -988,15 +990,17 @@ if [[ -n "$NODE" ]] && "$NODE" -e 'process.exit(Number(process.versions.node.spl
   json_is "dsh: calls take the guard's shapes (a bash workdir too) and are judged where they run; without onetree a call is denied" "$ag" \
     '.dsh.shapes == [{tool_name: "Bash", tool_input: {command: "ls", workdir: "w"}}, {tool_name: "Write", tool_input: {file_path: "f"}}, {tool_name: "Edit", tool_input: {file_path: "f"}}, {tool_name: "Write", tool_input: {file_path: "f"}}, null, null]
      and .dsh.verdicts == ["deny", "allow", "deny", "allow", "allow"] and .dshMissing == "deny"'
+  json_is "dsh: a session in a worktree is granted that worktree's git folders for its sandbox, once; a session in the main checkout is granted nothing" "$ag" \
+    '(.dshGrants | map(.[0]) | unique) == ["dsh-wt"] and (.dshGrants | map(.[1] | sub("^.*/\\.git/"; "")) | sort) == (["objects", "worktrees/pi-follow", "refs/heads/feature", "logs/refs/heads/feature", "refs/remotes/origin", "logs/refs/remotes/origin"] | sort)'
   json_is "dsh: the session hint is injected as the plugin's own user message" "$ag" \
     '.dshHint | length == 1 and .[0].role == "user" and .[0].plugin == "onetree" and (.[0].text | test("guarded read-only mirror"))'
 elif [[ -n "${CI:-}" ]]; then bad "pi and dsh: node 22 or newer is required in CI"
 else printf 'skip  pi and dsh: node 22 or newer is unavailable\n'; fi
 gw=$($ONETREE new grants-a "$CW" 2>/dev/null); git -C "$CW" worktree add -q -b plain "$TMP/plain-tree" origin/main
 grants() { $ONETREE codex-grants "$1" | grep -v '^--add-dir$' | sed "s#^$CW/.git#G#" | tr '\n' ' '; }
-eq "codex-grants: objects, the worktree's git dir, its branch's namespace and the remotes' tracking refs; never .git, refs, refs/heads, config or hooks" \
-  "$(grants "$gw")| $(grants "$TMP/plain-tree")" \
-  "G/objects G/worktrees/grants-a G/refs/heads/feature G/logs/refs/heads/feature G/refs/remotes/origin G/logs/refs/remotes/origin | G/objects G/worktrees/plain-tree G/refs/remotes/origin G/logs/refs/remotes/origin "
+eq "codex-grants: objects, the worktree's git dir, its branch's namespace and the remotes' tracking refs; never .git, refs, refs/heads, config or hooks; a main checkout gets none" \
+  "$(grants "$gw")| $(grants "$TMP/plain-tree")| $(grants "$CW")" \
+  "G/objects G/worktrees/grants-a G/refs/heads/feature G/logs/refs/heads/feature G/refs/remotes/origin G/logs/refs/remotes/origin | G/objects G/worktrees/plain-tree G/refs/remotes/origin G/logs/refs/remotes/origin | "
 mkdir -p "$HOME/.pi/agent" "$HOME/.dsh" "$TMP/vbin"; printf '#!/bin/sh\nexit 0\n' > "$TMP/vbin/pi"; printf '#!/bin/sh\nexec sleep 30\n' > "$TMP/vbin/dsh"; chmod +x "$TMP/vbin/pi" "$TMP/vbin/dsh"
 t0=$SECONDS; starts=$(PATH="$TMP/vbin:$PATH" doctor_json | jq -c '[.checks[] | select(.name | test("^(pi|dsh) on PATH starts")) | .ok]')
 eq "doctor: an installed agent whose client does not start, or hangs, fails within its time limit, since its wrapper cannot start it either" \

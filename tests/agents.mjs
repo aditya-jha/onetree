@@ -71,16 +71,17 @@ async function pi(opts = {}) {
 }
 // dsh: calls mapped onto the guard's shapes, judged where they run; the session hint injected at start
 async function dsh(missing) {
-  const on = {};
+  const on = {}, grants = [];
   const mod = await load(plugin, missing);
-  mod.apply({ on: (ev, fn) => (on[ev] = fn) });
+  const sandboxPolicy = { registerWritableRoot: (session, dir) => grants.push([session.header.id, dir]) };
+  mod.apply({ on: (ev, fn) => (on[ev] = fn), inject: (names, fn) => fn({ sandboxPolicy }) });
   const agent = { session: { header: { cwd: mirror, id: "dsh-1" } } };
   const call = async (name, args) => {
     let passed = false;
     const r = await on["tools/pre-execute"]({ name, arguments: args, agent }, async () => { passed = true; return { kind: "allow" }; });
     return passed ? "allow" : r.kind;
   };
-  return { mod, on, agent, call };
+  return { mod, on, agent, call, grants };
 }
 {
   const host = await dsh(false);
@@ -101,5 +102,10 @@ async function dsh(missing) {
   host.on["agent/session-start"]({ agent: { ...host.agent, inject: m => injected.push(m) }, source: "startup" });
   out.dshHint = injected.map(m => ({ role: m.role, text: m.content[0].text, plugin: m.source.plugin }));
   out.dshMissing = await (await dsh(true)).call("bash", { command: "ls" });
+  // a session whose folder is a worktree is granted that worktree's git folders, once; one in the main checkout, nothing
+  const inTree = { session: { header: { cwd: worktree, id: "dsh-wt" } } };
+  await host.on["tools/pre-execute"]({ name: "read", arguments: {}, agent: inTree }, async () => ({ kind: "allow" }));
+  host.on["agent/session-start"]({ agent: inTree, source: "resume" });
+  out.dshGrants = host.grants;
 }
 process.stdout.write(JSON.stringify(out) + "\n");

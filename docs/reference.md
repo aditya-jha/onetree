@@ -404,7 +404,9 @@ calls the same `onetree guard`. dsh is bound by `~/.dsh/onetree-plugin.mjs`,
 loaded for every dsh profile by a managed row in `~/.dsh/cordis.patch.yml`: it
 maps dsh's tools (bash with its `workdir`, write, edit, `str_replace_editor`)
 onto the shapes the guard reads and denies what it refuses. `onetree render
-pi|dsh` prints either file as install writes it.
+pi|dsh` prints either file as install writes it. dsh counts as dsh however it
+is started: by its name, as the `@deepseek-ai/dsh` package, or from its source
+checkout (`node … deepseek-harness/apps/cli/src/bin.ts`).
 
 ### Sessions
 
@@ -482,6 +484,19 @@ integration branch) and each remote's tracking refs. It also sets
 Codex through `GIT_CONFIG_PARAMETERS`. So commit, rebase and fetch work, and
 pushing works where Codex has network access; `git push -u` can't record an
 upstream (`.git/config` stays read-only), so push with `git push <remote> HEAD`.
+
+dsh's `workspace-write` sandbox, the headless default, has the same limit, and
+takes grants while it runs. So the plugin grants a session whose folder is a
+worktree the same folders (`onetree codex-grants`), once per live session and
+again after a resume, through dsh's `sandboxPolicy.registerWritableRoot`: every
+dsh profile gets them with no launch flag. A session in a main checkout is
+granted nothing, and a sandboxed session still cannot make a second worktree:
+`onetree new` says so.
+
+Under either sandbox git prints `error: Unable to create
+'<main>/.git/packed-refs.lock': Operation not permitted` on each commit. The
+commit still lands: git takes that lock as part of a ref update and carries on
+without it, and the file sits in `.git` itself, which is never granted.
 
 In the Claude app, a session started with **Worktree** on gets an onetree
 worktree from the start: the app runs onetree's WorktreeCreate hook

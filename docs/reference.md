@@ -432,7 +432,12 @@ or failing onetree refuses to start it there. Claude is started in that
 folder, never through its own `--worktree` option, which binds the session and
 makes Claude refuse shell commands it can't prove stay inside. onetree
 pre-trusts `<root>/<repo>` in `~/.claude.json` once, Claude's documented way to
-trust a folder, so no trust dialog appears in its worktrees. Claude's own
+trust a folder, so no trust dialog appears in its worktrees. `onetree new`
+and `carry` also record each new worktree of a checkout Claude trusts by its
+own path: the desktop app asks before `change_directory` moves a session into
+an untrusted folder, and the move fails ("Couldn't move the session to …")
+when that prompt goes unanswered for five minutes. A `review` checkout gets no
+such record. Claude's own
 `--worktree`, `--continue` and `--resume` pass through. The wrapper functions'
 names start with a letter (`onetree_launch`, `onetree_claude_passthrough`, …):
 Claude Code snapshots a shell's functions for its agents but drops variables

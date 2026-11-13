@@ -1382,7 +1382,7 @@ cmd_new() {
   if [[ -d "$path" ]]; then
     git -C "$main" worktree list --porcelain | grep -qx "worktree $path" || die "$path exists but is not a worktree of $repo"
     if ! bootstrap "$main" "$path"; then die "bootstrap failed in $path (worktree kept; retry the same slug)"; fi
-    mark_ours "$path"
+    mark_ours "$path"; claude_trust_worktree "$main" "$path"
     [[ -n "$h" ]] && log_event new "path=$path" "repo=$repo" "branch=$branch" "reused:=true" "agent=${h%%-*}" "host=$h" "session=$SKEY_SESSION" "pid:=${SKEY_PID:-null}" "pidStart=$SKEY_START" ${SUBAGENT:+"subagent=$SUBAGENT"}
     echo "$path"; [[ "$ONETREE_CMD" == new ]] && next_step "$path" "$main"; return 0
   fi
@@ -1421,7 +1421,7 @@ cmd_new() {
     [[ $created_branch == 1 ]] && git -C "$main" branch -q -D "$branch" 2>/dev/null || true
     die "bootstrap failed; rolled back new worktree $path"
   fi
-  tmark "new: bootstrap"; mark_ours "$path"
+  tmark "new: bootstrap"; mark_ours "$path"; claude_trust_worktree "$main" "$path"
   log_event new "path=$path" "repo=$repo" "branch=$branch" "seconds:=$SECONDS" "resumed:=$([[ $created_branch == 1 ]] && echo false || echo true)" \
     "agent=${h%%-*}" "host=$h" "session=$SKEY_SESSION" "pid:=${SKEY_PID:-null}" "pidStart=$SKEY_START" ${SUBAGENT:+"subagent=$SUBAGENT"}
   echo "$path"; [[ "$ONETREE_CMD" == new ]] && next_step "$path" "$main"
@@ -2002,6 +2002,16 @@ claude_trust_root() {
   jq -e --arg p "$r" '.projects[$p].hasTrustDialogAccepted == true' "$f" >/dev/null 2>&1 && return 0
   if t=$(mktemp "$f.XXXXXX") && jq --arg p "$r" '.projects[$p].hasTrustDialogAccepted = true' "$f" > "$t" && mv "$t" "$f"; then return 0; fi
   rm -f "${t:-}"; printf 'onetree: could not record Claude trust for %s; Claude will ask once\n' "$r" >&2; return 0
+}
+# main worktree — Claude trusts the main checkout, so the worktree onetree makes of it is trusted too, by its own path:
+# Claude Code looks a folder up by exact path first, and the desktop app asks before it moves a session into an
+# untrusted one (change_directory), then gives up when nobody answers for five minutes. A review checkout is not
+# made here and gets no trust
+claude_trust_worktree() {
+  local f=${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json t
+  [[ -f "$f" ]] && jq -e --arg m "$1" --arg p "$2" '.projects[$m].hasTrustDialogAccepted == true and .projects[$p].hasTrustDialogAccepted != true' "$f" >/dev/null 2>&1 || return 0
+  if t=$(mktemp "$f.XXXXXX") && jq --arg p "$2" '.projects[$p].hasTrustDialogAccepted = true' "$f" > "$t" && mv "$t" "$f"; then return 0; fi
+  rm -f "${t:-}"; return 0
 }
 cmd_auto() {
   local agent=${1:?agent}; local m; m=$(guarded_main_of_path "$PWD") || exit 1

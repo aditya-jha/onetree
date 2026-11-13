@@ -35,7 +35,11 @@ folder is a guarded main checkout, the plugin:
    directory as writable roots of the session. The sandbox's own root stays
    the session's folder, grants are lost on resume, and dsh fails a call over
    a root that is a symlink alias;
-3. sets the session's working directory to the worktree
+   All of them or none: if `codex-grants` fails or a registration throws, the
+   ones made are taken back, the session is not moved and is told why, and
+   the plugin tries again before each tool call. A session moved into a
+   worktree it cannot commit in would be worse off than one left in place;
+3. then sets the session's working directory to the worktree
    (`workingDirectory.set`), unless it is already inside it. dsh's bash and
    file tools resolve against that directory, and dsh records it in the
    session, so it survives a resume;
@@ -49,13 +53,16 @@ folder; a bash call's `workdir` still wins.
 `onetree auto` with a session id binds the worktree as `new` does (the `new`
 event carries the session) and is idempotent per session through
 `bound_worktrees`, so every later announcement ends in the same state without
-a second worktree. A subagent's session is created in its parent's folder; the
+a second worktree. Its name carries a hash of the session id, and `auto` never
+takes a folder or branch that already exists for a session: reusing one would
+bind two sessions to one worktree. A subagent's session is created in its parent's folder; the
 plugin asks under the parent's id, so it shares the parent's worktree.
 
 If `auto` fails or times out, the session stays where it is, the guard still
 protects the main checkout, and the injected message says what failed. Without
 the `workingDirectory` service the worktree is still made and the hint says to
-pass `workdir`; without `sandboxPolicy` nothing is granted.
+pass `workdir`; without `sandboxPolicy` there is no sandbox, so the session is
+moved with nothing granted.
 
 ## What was rejected
 

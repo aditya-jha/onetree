@@ -427,11 +427,17 @@ call in the session's working directory unless the call names a `workdir`.
 (`ONETREE_SESSION_ID`, else `DSH_SESSION_ID`) binds the worktree to that
 session and, asked again for the same session, prints the worktree it has
 instead of making another; a subagent's session shares its parent's. Without
-an id (the shell wrappers) every call makes a new one. If `auto` fails, the
+an id (the shell wrappers) every call makes a new one. A session's worktree
+is named `<agent>-<date>-<time>-<hash of the session id>`; a name whose folder
+or branch already exists is never reused for it (the next of five names is
+taken, then `auto` fails), so two sessions never share one. The plugin grants
+before it moves: if the grants cannot all be made, the session is not moved,
+holds none of them, is told where its worktree is and why it is closed, and
+the plugin tries again before each tool call. If `auto` fails, the
 session stays in the main checkout, still guarded, and the message says what
 failed. In a profile without dsh's `workingDirectory` service the worktree is
 still made and the session is told to pass `workdir`; without `sandboxPolicy`
-nothing is granted. The session hint (`onetree session`) takes dsh from the
+there is no sandbox to open, and the session is moved all the same. The session hint (`onetree session`) takes dsh from the
 plugin's payload, as the guard does.
 
 What stays: the web UI lists the session under the folder it was created in

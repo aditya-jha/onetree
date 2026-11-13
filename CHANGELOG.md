@@ -20,7 +20,10 @@
   judges a call in that working directory. It does this at startup, resume,
   clear and compact. `onetree auto <agent>` with `ONETREE_SESSION_ID` (else
   `DSH_SESSION_ID`) set binds the worktree to that session and returns the
-  same one when asked again; the shell wrappers are unchanged. The plugin's
+  same one when asked again, and never gives a session a folder or branch
+  that already exists; the shell wrappers are unchanged. The plugin moves a
+  session only after every grant is made, and retries before each tool call
+  until then. The plugin's
   session hint had never been shown: it listened to `agent/session-start`,
   which dsh does not emit (the event is `agent/created`). The hint and a
   refusal now say "this session works in <worktree>" once it is moved, and no

@@ -950,7 +950,21 @@ eq "dsh: a worktree made from a dsh shell command is bound to its session by DSH
 a1=$(cd "$CW" && ONETREE_SESSION_ID=s-dsh-auto $ONETREE auto dsh 2>/dev/null); a2=$(cd "$CW" && DSH_SESSION_ID=s-dsh-auto $ONETREE auto dsh 2>/dev/null); a3=$(cd "$CW" && $ONETREE auto dsh 2>/dev/null)
 json_is "auto: with a session id in the environment (ONETREE_SESSION_ID, else DSH_SESSION_ID) the worktree is bound to that session, and asked again the session gets the one it has; without an id each call makes its own, bound to nobody" \
   "$($ONETREE events --json --kind new | jq -c --arg a1 "$a1" --arg a2 "$a2" --arg a3 "$a3" '{a1: $a1, a2: $a2, a3: $a3, e1: map(select(.path == $a1)), e3: map(select(.path == $a3))}')" \
-  '(.a1 | test("/cw-main/dsh-[0-9-]+$")) and .a2 == .a1 and (.a3 | test("/cw-main/dsh-")) and .a3 != .a1 and (.e1 | map([.agent, .host, .session, .pid])) == [["dsh", "dsh", "s-dsh-auto", null]] and (.e3 | map(.session)) == [""]'
+  '(.a1 | test("/cw-main/dsh-[0-9]{6}-[0-9]{6}-[0-9a-f]{10}$")) and .a2 == .a1 and (.a3 | test("/cw-main/dsh-")) and .a3 != .a1 and (.e1 | map([.agent, .host, .session, .pid])) == [["dsh", "dsh", "s-dsh-auto", null]] and (.e3 | map(.session)) == [""]'
+# two sessions asking in the same second (date is frozen for these calls), whose ids gave one name under a four-digit checksum
+mkdir -p "$TMP/frozen"; printf '%s\n' '#!/bin/sh' 'case "$1" in +%y%m%d-%H%M%S) echo 990101-000000 ;; *) exec '"$(command -v date)"' "$@" ;; esac' > "$TMP/frozen/date"; chmod +x "$TMP/frozen/date"
+frozen_auto() { (cd "$CW" && PATH="$TMP/frozen:$PATH" ONETREE_SESSION_ID=$1 $ONETREE auto dsh 2>/dev/null) || true; }
+c1=$(frozen_auto s-dsh-c42); c2=$(frozen_auto s-dsh-c112)
+json_is "auto: two sessions that ask in the same second get a worktree each, named by a hash of the session id and bound to that session alone" \
+  "$($ONETREE events --json --kind new | jq -c --arg c1 "$c1" --arg c2 "$c2" '{c1: $c1, c2: $c2, s1: map(select(.path == $c1) | .session), s2: map(select(.path == $c2) | .session)}')" \
+  '(.c1 | test("/dsh-990101-000000-[0-9a-f]{10}$")) and (.c2 | test("/dsh-990101-000000-[0-9a-f]{10}$")) and .c1 != .c2 and .s1 == ["s-dsh-c42"] and .s2 == ["s-dsh-c112"]'
+# the name a session would get is taken: by another session's worktree (its branch renamed since, as agents do), then by a branch left behind
+taken=dsh-990101-000000-$(printf %s s-dsh-taken | git hash-object --stdin | cut -c1-10)
+sq=$(DSH_SESSION_ID=s-dsh-squatter $ONETREE new "$taken" "$CW" 2>/dev/null); git -C "$sq" branch -m feature/squatter-renamed; git -C "$CW" branch -q "feature/$taken-2" origin/main
+c3=$(frozen_auto s-dsh-taken)
+json_is "auto: a session never gets a worktree or a branch that is already there: it takes the next free name, and the other session's worktree stays that session's alone" \
+  "$($ONETREE events --json --kind new | jq -c --arg c3 "$c3" --arg t "$taken" '{c3: $c3, mine: map(select(.path == $c3) | .session), theirs: map(select(.path | endswith("/" + $t)) | .session)}')" \
+  '(.c3 | endswith("/'"$taken"'-3")) and .mine == ["s-dsh-taken"] and .theirs == ["s-dsh-squatter"]'
 dsh_hint() { (cd "$CW" && jq -nc --arg cwd "$2" --arg s "$1" '{session_id: $s, cwd: $cwd, agent: "dsh"}' | ONETREE_HOST=claude-cli $ONETREE session); }   # the payload says dsh, whatever the process looks like
 ab=$(git -C "$a1" branch --show-current)
 gm=$({ jq -nc --arg cwd "$a1" --arg wd "$CW" '{tool_name: "Bash", cwd: $cwd, session_id: "s-dsh-auto", agent: "dsh", tool_input: {command: "git stash", workdir: $wd}}' | ONETREE_NO_EVENTS=1 $ONETREE guard >/dev/null; } 2>&1 || true)
@@ -1019,6 +1033,13 @@ if [[ -n "$NODE" ]] && "$NODE" -e 'process.exit(Number(process.versions.node.spl
     '.dshAuto.tree as $t | .dshChild | .made == 1 and .moved == [["dsh-child", $t]] and .granted and .gitDirs == 6'
   json_is "dsh: when auto fails the session stays where it is, with no grant and no move, is told what failed and what to do by hand, and is still guarded" "$ag" \
     '.dshFails | .made == 0 and .moves == [] and .grants == [] and .plain == "deny" and (.injected | length == 1) and (.injected[0].text | test("could not make a worktree for this session \\(error: bootstrap failed; rolled back new worktree\\), so it stays in .*cw-main, the read-only main checkout") and test("run `onetree new <slug>`, then pass `workdir`"))'
+  json_is "dsh: a session whose worktree could not be made is given one when it is announced again (the same session object, after a clear), with its grants and the move" "$ag" \
+    '.dshFails.retry == {moves: 1, granted: 1, gitDirs: 6}'
+  json_is "dsh: a session is moved only into a worktree its sandbox is open to: while codex-grants fails or lists nothing, or the sandbox refuses one directory, it is not moved, holds no partial grant, is told once where the worktree is and why it is closed, and its calls are judged in the main checkout; the next tool call tries again, and then it is granted everything once and moved" "$ag" \
+    '.dshClosed | [.fails, .empty, .refused] | all(.before.moves == 0 and .before.grants == 0 and .before.plain == "deny" and (.before.injected | length == 1) and (.before.injected[0] | test("worktree exists at .*/cw-main/dsh-.* but could not be opened in dsh.s sandbox \\((`onetree codex-grants` failed|`onetree codex-grants` listed no git folders for it|the sandbox refuses .*/objects)\\), so the session was not moved"))
+       and .after == "allow" and .moves == 1 and .granted == 1 and .gitDirs == 6 and .all == 7)'
+  json_is "dsh: a profile with no sandbox policy has nothing to grant, and its session is moved into the worktree all the same" "$ag" \
+    '.dshNoSandbox == {moves: 1, grants: 0, plain: "allow"}'
   json_is "dsh: a profile without the sandbox policy and the working-directory service still gets the worktree and the guard: the session is told to pass workdir, a plain command is judged in the main checkout and one with workdir in the worktree passes" "$ag" \
     '.dshBare | .made == 1 and (.tree | test("/cw-main/dsh-")) and (.injected | length == 1) and (.tree as $t | .injected[0].text | contains("pass `workdir` " + $t + " to every bash call")) and .plain == "deny" and .inTree == "allow"'
 elif [[ -n "${CI:-}" ]]; then bad "pi and dsh: node 22 or newer is required in CI"

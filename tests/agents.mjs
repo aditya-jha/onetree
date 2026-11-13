@@ -3,7 +3,7 @@
 // onetree runs as itself (the extension and plugin call the absolute path baked into them); HOME, the registry and the event log are the
 // suite's. Every case runs in a fresh host, so nothing one case does leaks into the next.
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -70,16 +70,23 @@ async function pi(opts = {}) {
   out.trust = [out.pi.worktree, mirror, review, other].map(cwd => host.on.project_trust({ type: "project_trust", cwd }).trusted);
 }
 // dsh: calls mapped onto the guard's shapes, judged where they run. The fake host has dsh's two optional services (bare: neither): the
-// sandbox policy records grants, and the working directory is kept per session id, as dsh keeps it across a resume
+// sandbox policy records grants (and takes one back through the disposer it returns; host.refuse makes it throw for a directory), and the
+// working directory is kept per session id, as dsh keeps it across a resume. opts.without names services the profile lacks
 async function dsh(opts = {}) {
-  const on = {}, grants = [], moves = [], dirs = new Map();
+  const on = {}, grants = [], moves = [], dirs = new Map(), host = { refuse: () => false };
   const mod = await load(plugin, opts.onetree);
   const workingDirectory = {
     get: session => dirs.get(session.header.id) || session.header.cwd,
     ensure: async agent => workingDirectory.get(agent.session),
     set: async (agent, path) => { moves.push([agent.session.header.id, path]); dirs.set(agent.session.header.id, path); return path; },
   };
-  const services = opts.bare ? {} : { workingDirectory, sandboxPolicy: { registerWritableRoot: (session, dir) => grants.push([session.header.id, dir]) } };
+  const sandboxPolicy = { registerWritableRoot: (session, dir) => {
+    if (host.refuse(dir)) throw new Error("the sandbox refuses " + dir);
+    const entry = [session.header.id, dir]; grants.push(entry);
+    return () => grants.splice(grants.indexOf(entry), 1);
+  } };
+  const services = opts.bare ? {} : { workingDirectory, sandboxPolicy };
+  for (const name of opts.without || []) delete services[name];
   mod.apply({ on: (ev, fn) => (on[ev] = fn), inject: (names, fn) => { if (names.every(name => services[name])) fn(services); } });
   const session = (id, cwd = mirror, more = {}) => {   // a new session object each time, as after a resume
     const injected = [];
@@ -91,7 +98,7 @@ async function dsh(opts = {}) {
     const r = await on["tools/pre-execute"]({ name, arguments: args, agent }, async () => { passed = true; return { kind: "allow" }; });
     return passed ? "allow" : r.kind;
   };
-  return { mod, on, call, grants, moves, session, created };
+  return Object.assign(host, { mod, on, call, grants, moves, session, created });
 }
 const trees = () => spawnSync("git", ["-C", mirror, "worktree", "list", "--porcelain"], { encoding: "utf8" }).stdout.split("\n").filter(l => l.startsWith("worktree ")).length;
 const gitDirs = (host, id) => host.grants.filter(g => g[0] === id).map(g => g[1].replace(/^.*\/\.git\//, ".git/")).filter(d => d.startsWith(".git/")).length;
@@ -144,12 +151,16 @@ const gitDirs = (host, id) => host.grants.filter(g => g[0] === id).map(g => g[1]
 // dsh: `auto` fails (here an onetree whose `auto dsh` fails, and is itself in every other call): the session stays, is told why, and is still guarded
 {
   const stub = join(process.env.HOME, "onetree-auto-fails");
-  writeFileSync(stub, `#!/bin/sh\n[ "$1 $2" = "auto dsh" ] && { echo "error: bootstrap failed; rolled back new worktree" >&2; exit 1; }\nexec "${onetree}" "$@"\n`);
+  writeFileSync(stub, `#!/bin/sh\n[ "$1 $2" = "auto dsh" ] && [ ! -f "${stub}.off" ] && { echo "error: bootstrap failed; rolled back new worktree" >&2; exit 1; }\nexec "${onetree}" "$@"\n`);
   chmodSync(stub, 0o755);
   const host = await dsh({ onetree: stub });
   const before = trees();
   const agent = await host.created(host.session("dsh-fails"));
-  out.dshFails = { made: trees() - before, moves: host.moves, grants: host.grants, injected: agent.injected, plain: await host.call("bash", { command: "git stash" }, agent) };
+  out.dshFails = { made: trees() - before, moves: [...host.moves], grants: [...host.grants], injected: [...agent.injected], plain: await host.call("bash", { command: "git stash" }, agent) };
+  writeFileSync(stub + ".off", "");   // auto works again: the session, granted nothing so far, is announced once more
+  await host.created(agent, "clear");
+  const tree = (host.moves[0] || [])[1] || "";
+  out.dshFails.retry = { moves: host.moves.length, granted: host.grants.filter(g => g[1] === tree).length, gitDirs: gitDirs(host, "dsh-fails") };
 }
 // dsh: a profile with neither service: the worktree is made and the session told to name it; calls are judged in the session's folder
 {
@@ -158,5 +169,33 @@ const gitDirs = (host, id) => host.grants.filter(g => g[0] === id).map(g => g[1]
   const agent = await host.created(host.session("dsh-bare"));
   const tree = (/has its own worktree, ([^,]+),/.exec((agent.injected[0] || {}).text || "") || [])[1] || "";
   out.dshBare = { made: trees() - before, tree, injected: agent.injected, plain: await host.call("bash", { command: "git stash" }, agent), inTree: await host.call("bash", { command: "git stash", workdir: tree }, agent) };
+}
+// dsh: a session is moved only into a worktree its sandbox is open to. While the grants cannot be made (codex-grants fails, or lists nothing,
+// or the sandbox refuses one directory) it stays, holds no partial grant and is told why; the next tool call tries again, and then it moves
+{
+  const flag = join(process.env.HOME, "codex-grants-mode"), stub = join(process.env.HOME, "onetree-grants-fail");
+  writeFileSync(stub, `#!/bin/sh\nif [ "$1" = codex-grants ] && [ -f "${flag}" ]; then [ "$(cat "${flag}")" = empty ] && exit 0; "${onetree}" "$@"; exit 1; fi\nexec "${onetree}" "$@"\n`);
+  chmodSync(stub, 0o755);
+  const stuck = async (id, close, open) => {
+    const host = await dsh({ onetree: stub });
+    close(host);
+    const agent = await host.created(host.session(id));
+    const before = { moves: host.moves.length, grants: host.grants.length, injected: agent.injected.map(m => m.text), plain: await host.call("bash", { command: "git stash" }, agent) };
+    open(host);
+    const after = await host.call("bash", { command: "git stash" }, agent);
+    const tree = (host.moves[0] || [])[1] || "";
+    return { before, after, tree, moves: host.moves.length, granted: host.grants.filter(g => g[1] === tree).length, gitDirs: gitDirs(host, id), all: host.grants.length };
+  };
+  out.dshClosed = {
+    fails: await stuck("dsh-grants-fail", () => writeFileSync(flag, "fail"), () => rmSync(flag)),
+    empty: await stuck("dsh-grants-empty", () => writeFileSync(flag, "empty"), () => rmSync(flag)),
+    refused: await stuck("dsh-grant-refused", host => { host.refuse = dir => dir.endsWith("/objects"); }, host => { host.refuse = () => false; }),
+  };
+}
+// dsh: a profile with no sandbox policy has no sandbox to open: the session is moved all the same
+{
+  const host = await dsh({ without: ["sandboxPolicy"] });
+  const agent = await host.created(host.session("dsh-no-sandbox"));
+  out.dshNoSandbox = { moves: host.moves.length, grants: host.grants.length, plain: await host.call("bash", { command: "git stash" }, agent) };
 }
 process.stdout.write(JSON.stringify(out) + "\n");

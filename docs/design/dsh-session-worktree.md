@@ -1,11 +1,13 @@
 # A dsh session gets its worktree from the plugin
 
-**Status:** built 2026-11-13 (#20), restated as three rules after two reviews; checked against a fake dsh host in
-`tests/agents.mjs`, not yet in a real browser session.
+**Status:** built 2026-11-13 (#20) in its third, smaller design (see "What was
+dropped"); checked against a fake dsh host in `tests/agents.mjs`, not yet in a
+real browser session.
 
-**In one line:** when dsh announces a session whose folder is a guarded main
-checkout, onetree's plugin makes its worktree, opens the sandbox to it and
-moves the session's working directory there.
+**In one line:** onetree's dsh plugin follows the session's own working
+directory: in a guarded main checkout it makes a worktree and moves the
+session there, in a worktree it opens the sandbox to it, and it keeps no
+record of which session has which worktree.
 
 ## The problem
 
@@ -23,79 +25,86 @@ The plugin's session hint had also never run: it listened to
 
 ## The decision
 
-At `agent/created` (startup, resume, clear, compact), for a session whose
-folder is a guarded main checkout, the plugin:
+dsh stores a session's working directory in the session itself (the folder in
+its header never changes) and restores it on resume and in a fork; when the
+stored directory no longer exists, dsh puts the session back in the folder it
+was created in. The plugin reads that directory and nothing else.
 
-1. runs `onetree auto dsh` there with the session's id in the environment. A
-   plugin runs in dsh's server process, outside the sandbox. The call is
-   asynchronous with a ten-minute limit: dsh holds the session's queued input
-   until the listener returns, and a synchronous spawn would stop the server
-   for every session while bootstrap runs;
-2. registers the worktree, by real path, and each `onetree codex-grants`
-   directory as writable roots of the session. The sandbox's own root stays
-   the session's folder, grants are lost on resume, and dsh fails a call over
-   a root that is a symlink alias;
-   All of them or none: if `codex-grants` fails or a registration throws, the
-   ones made are taken back, the session is not moved and is told why, and
-   the plugin tries again before each tool call. A session moved into a
-   worktree it cannot commit in would be worse off than one left in place;
-3. then sets the session's working directory to the worktree
-   (`workingDirectory.set`), unless it is already inside it. dsh's bash and
-   file tools resolve against that directory, and dsh records it in the
-   session, so it survives a resume;
-4. injects `onetree session`'s hint, which names the worktree, its
-   placeholder branch and the read-only main checkout.
+When dsh announces a session (`agent/created`):
 
-The guard is then sent the session's working directory
-(`workingDirectory.ensure`, the call dsh's own tools make) instead of its
-folder; a bash call's `workdir` still wins.
+1. **Working directory in a guarded main checkout:** the plugin runs plain
+   `onetree auto dsh` there, the command the shell wrapper runs (`auto`
+   binds its worktree to no session). A plugin runs in dsh's server process,
+   outside the sandbox. The call is asynchronous with a ten-minute limit: dsh
+   holds the session's queued input until the listener returns, and a
+   synchronous spawn would stop the server for every session while bootstrap
+   runs. It then registers the worktree, by real path (dsh fails a call over a
+   root that is a symlink alias), and each `onetree codex-grants` folder as
+   writable roots of the session, all of them or none: if `codex-grants`
+   fails or a registration throws, the ones made are taken back. Only then
+   does it set the session's working directory to the worktree
+   (`workingDirectory.set`), and it injects one message.
+2. **Working directory already inside a worktree** (a resume, a fork, a
+   session started through the shell wrapper): the plugin opens that worktree
+   (its root from `git rev-parse --show-toplevel`) and its `codex-grants`
+   folders in the sandbox. Nothing is made and nothing is moved.
+3. **A subagent** (`origin: "subagent"` in the session's header): dsh already
+   starts a new subagent in its parent's working directory. One it left in
+   the folder of its header is put where its parent works, when the parent is
+   a session the plugin has seen announced; then case 2 applies. A subagent
+   never gets a worktree of its own.
 
-Two reviews found seven defects of two kinds (a session handed a worktree
-that was not its own; a session left in a worktree its sandbox had not
-opened), so the design is three rules, each with one place that enforces it.
+Before every tool call the plugin opens the worktree the session's working
+directory is in, if it has not yet for this live session: the grants are lost
+on resume, a first attempt may have failed, and the directory can change
+during a session. A worktree made in case 1 and not entered yet is tried
+again first, and entered once its grants are made. The guard is then sent
+that working directory (`workingDirectory.ensure`, the call dsh's own tools
+make); a bash call's `workdir` still wins.
 
-### 1. One session, one worktree, by name
+The injected message says which state the session is in: it works in a
+worktree (the path and its branch); no worktree could be made, so it stays in
+the main checkout (the reason, and how to work in a worktree by hand); a
+worktree was made at a path but the session was not moved (the reason, and
+that it is tried again before each call).
 
-A session-bound `auto` (`auto_session` in `bin/onetree`) names the worktree
-`<agent>-<hash of the owning session's id>`: no timestamp, so the same session
-always asks about the same folder and branch. It takes a lock per name (an
-atomic `mkdir` in the main checkout's git directory; a lock whose holder died
-is taken over by one taker) and holds it from the first look to the finished
-worktree, across the fetch, `git worktree add` and bootstrap. Before the
-worktree exists it writes the `new` event that binds the path to the session,
-which is how "made for this session" is decided later (`bound_worktrees`).
-It makes a new folder on a new branch and nothing else: it does not call
-`cmd_new`, whose job includes resuming a branch and reusing a folder. A
-folder, or a local or remote branch (checked after the fetch), of that name
-that was not made here for this session is a failure with a message. A second
-call for the same session waits for the lock and prints the same worktree;
-one that finds the worktree made but never finished (the first call died)
-finishes its bootstrap.
+`onetree session` and the guard's refusal go by the working directory the
+plugin sends: inside a worktree of the checkout, they say the session works
+there and to leave `workdir` out.
 
-### 2. Only a subagent inherits
+## What it does not promise
 
-A subagent's session is created in its parent's folder, and the plugin asks
-under the parent's id, so it shares the parent's worktree. It does that only
-for a session whose header says `origin: "subagent"`: a fork can carry its
-source in `parentSession` too, and is its own session.
+- **A fork shares its source's worktree.** It continues where the source was,
+  as a forked session does in every other agent.
+- **The sandbox is the enforcement for writes.** If a worktree's folders
+  cannot be opened, the plugin says so and tries again before each call; it
+  does not refuse calls itself. Writes then fail in the sandbox, as they do
+  for any folder that is not granted.
+- **No per-session bookkeeping.** `onetree auto` is what it is on `main`: a
+  worktree named `<agent>-<timestamp>`, no lock, no ownership record. A
+  session whose worktree was removed (by `gc` after its PR merged, or by hand)
+  and is then resumed finds its working directory gone, starts from the folder
+  it was created in, and gets a new worktree by case 1.
+- **A worktree made but never entered is not remembered across a restart.**
+  The plugin keeps it for the live session only; the same session resumed in
+  a new server process gets another, and `gc` removes the first, which has no
+  commits, after the stale window.
+- **Without the `workingDirectory` service** nothing is made: the session
+  cannot be moved, so it gets the guard and the hint. Without `sandboxPolicy`
+  there is no sandbox to open, and the session is moved all the same.
 
-### 3. No call runs in a worktree the sandbox has not fully opened
+## What was dropped
 
-`onetree codex-grants` exits non-zero when a folder it must list cannot be
-prepared. The plugin's `grant` needs that exit, the git folders and every
-registration; `place` moves only after it. When the grants are not complete,
-a first time or after a resume (dsh keeps the working directory, not the
-grants), `tools/pre-execute` tries again and denies, with the reason, a call
-whose working directory or target is inside the worktree. The sandbox would
-otherwise fail the call halfway with no reason. The injected message says
-which state the session is in: moved; not moved because no worktree could be
-made; made but not open, with the working directory in it or not.
-
-If `auto` fails or times out, the session stays where it is, the guard still
-protects the main checkout, and the injected message says what failed. Without
-the `workingDirectory` service the worktree is still made and the hint says to
-pass `workdir`; without `sandboxPolicy` there is no sandbox, so the session is
-moved with nothing granted.
+The first two versions bound a worktree to a session: `auto` took a session
+id, named the worktree after its hash, made it under a lock, wrote an
+ownership event before the folder existed, and the plugin denied calls in a
+worktree whose grants were not complete. Three reviews found thirteen defects
+in that machinery (a stale ownership event handed one session another's
+worktree; `cd <worktree> && …` slipped past the plugin's denial; the lock was
+released twice; a fork of a wrapper-started session shared its worktree
+anyway), and each fix added more of it. All of it is gone. The problem needs
+a browser session to end up in a worktree it can write to, and the session's
+own working directory already says where it is.
 
 ## What was rejected
 
@@ -106,13 +115,15 @@ moved with nothing granted.
   placeholder with no commits after the stale window.
 - **Letting the agent run `onetree new` with broader grants.** It would mean
   granting the sandbox onetree's registry and the whole worktrees root.
-- **A second registry of session-to-worktree.** The event log already binds
-  worktrees to sessions for the guard's refusal text.
 
 ## Known limits
 
 - The web UI lists the session under the folder it was created in, so its
   file pane shows the main checkout. dsh fixes a session's folder at creation.
-- The parent-of-a-subagent lookup is kept in the plugin's memory: a subagent
-  of a subagent resumed alone after a server restart gets its own worktree.
+- Grants follow the working directory. A bash call that names another
+  worktree as its `workdir` is judged there by the guard, but that worktree is
+  not opened in the sandbox.
+- A subagent's parent is looked up among the sessions announced in this
+  server process. dsh places a new subagent itself, so this matters only
+  where it did not.
 - A timeout stops `onetree auto`, not a bootstrap command it started.

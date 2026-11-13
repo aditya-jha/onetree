@@ -109,7 +109,7 @@ unregistered: see [Production checkouts](docs/reference.md#production-checkouts)
 
 ```
 $ git checkout other-branch        # an agent, in the main checkout
-onetree guard (mutating git): /Users/you/src/shop is the read-only main checkout of shop. Work in a worktree instead: run `onetree new <slug> shop`, then prefix every command with `cd <path> &&` and edit by absolute path (Claude: `EnterWorktree` with that path; in the Claude desktop app, `change_directory`). Never switch, stash, reset, edit, or run scripts, servers or tests in the main checkout; reading is fine. Gitignored local state (dependencies, caches, .env, local settings) stays writable here; tracked files, and new files git would track, do not.
+onetree guard (mutating git): /Users/you/src/shop is the read-only main checkout of shop. Work in a worktree instead: run `onetree new <slug> shop`, then prefix every command with `cd <path> &&` and edit by absolute path (in the Claude desktop app, `change_directory` with that path). Never switch, stash, reset, edit, or run scripts, servers or tests in the main checkout; reading is fine. Gitignored local state (dependencies, caches, .env, local settings) stays writable here; tracked files, and new files git would track, do not.
 
 $ onetree ls
 PATH                                      BRANCH                  DIRTY  UNPUSHED  PR             PRHEAD   LOCK  LIVE

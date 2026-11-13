@@ -333,7 +333,11 @@ refused there: spell the command out. A fetch into a local branch, git's own
 `--output` file, and `git config --file` into the mirror are writes. From
 anywhere, a path into the mirror (`git -C <mirror>`, `GIT_DIR=`,
 `--git-dir`, `env -C`, a script by its path, `npm --prefix`) is judged as the
-mirror.
+mirror. An interpreter (`python`, `node`, `perl`, a shell) is judged by the
+script it runs, the first word that is neither an option nor an option's
+value. The words after it are the script's own arguments, so from a worktree
+`python3 tool.py --repo <mirror>` passes (it reads the mirror) and
+`python3 -u <mirror>/tool.py` is refused.
 
 **It passes:** reads (`git status`, `git log`, `git diff`, `cat`, `rg`), writes
 into gitignored local state (Edit, Write, redirects and `tee` into an ignored
@@ -448,7 +452,7 @@ Claude shell is Codex), the host by its environment:
 | Agent and host | What it is told |
 |---|---|
 | Claude desktop app | `change_directory` with the path (main conversation only): the file pane, diff, terminal and PR card follow when the turn ends. `EnterWorktree` moves Claude but not the app, whose panes follow it only into `<repo>/.claude/worktrees` |
-| Claude CLI, IDE, SDK | `EnterWorktree` with the path; from outside the repo, `cd <path> &&` and absolute paths |
+| Claude CLI, IDE, SDK | `cd <path> &&` before every command and absolute paths for edits. Not `EnterWorktree`: it binds the session to that worktree, and Claude Code then refuses any shell command it cannot prove stays inside it (a `$(…)`, a loop, a variable next to `git`), in the session and its subagents |
 | Codex CLI | `cd <path> &&` before every command (the hook sees the command, never `workdir`) and absolute `apply_patch` paths; the user can move the thread with `/cd <path>` |
 | Codex app | the same; the thread's review pane stays where it started, so a new thread on the path reviews the work |
 | pi | nothing: the extension runs the session's commands in the worktree from then on |

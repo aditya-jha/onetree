@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- Claude CLI, IDE and SDK sessions are no longer told to call `EnterWorktree`
+  after `onetree new`; like every other agent they prefix commands with
+  `cd <worktree> &&` and edit by absolute path, and the rules say never to
+  call it. `EnterWorktree` binds the session to that worktree, and Claude Code
+  then refuses any shell command with git in it that it cannot verify (a
+  `$(…)`, a loop, a variable), in the session and all its subagents: one
+  session took 153 refusals after a single call (#15). Run `onetree update`
+  to refresh the rules block in `~/.claude/CLAUDE.md`.
+- The guard judges an interpreter by the script it runs, not by every
+  argument. `python3 tools/x.py --repo <main checkout>`, run from a worktree,
+  was refused as "running a mirror script by path" although the path was data;
+  and `python3 -u <main>/x.py`, `node --inspect server.js` in a main checkout
+  and `npm --prefix=<main> run build` passed, because an option came first.
+  Now the script is the first word that is no option, `npm` is judged by its
+  subcommand and `--prefix`, and `python3.12` counts as python (#15).
+- `onetree new` in a session that cannot write the main checkout's `.git` (a
+  Codex under `workspace-write`, whose sandbox is fixed at launch) says so and
+  names `onetree launch --task <slug> <agent>`, where it used to die on git's
+  "could not lock config file".
+
 ## 1.1.0 (2026-11-12)
 
 Install without cloning, and updates that follow releases instead of `main`.

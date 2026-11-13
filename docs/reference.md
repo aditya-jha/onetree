@@ -412,6 +412,34 @@ dsh's because the plugin says so, and a shell command is dsh's because dsh
 gives it `DSH_SESSION_ID`. That id also binds a worktree made by `onetree new`
 to the dsh session, so a later refusal names it.
 
+A dsh session made in the browser takes its folder from the web UI, so no
+shell wrapper stands in front of it. The plugin does the wrapper's job when dsh
+announces a session (`agent/created`: at startup, resume, clear and compact).
+For a session whose folder is a guarded main checkout it runs `onetree auto
+dsh` there, outside dsh's sandbox and without blocking the server (bootstrap
+may take minutes; it gives up after ten), grants the session's sandbox the
+worktree and its git folders, moves the session's working directory into the
+worktree, and injects one message naming the worktree, its placeholder branch
+and the read-only main checkout. Commands and relative paths then run in the
+worktree with nothing for the user or the agent to do, and the guard judges a
+call in the session's working directory unless the call names a `workdir`.
+`onetree auto <agent>` with a session id in the environment
+(`ONETREE_SESSION_ID`, else `DSH_SESSION_ID`) binds the worktree to that
+session and, asked again for the same session, prints the worktree it has
+instead of making another; a subagent's session shares its parent's. Without
+an id (the shell wrappers) every call makes a new one. If `auto` fails, the
+session stays in the main checkout, still guarded, and the message says what
+failed. In a profile without dsh's `workingDirectory` service the worktree is
+still made and the session is told to pass `workdir`; without `sandboxPolicy`
+nothing is granted. The session hint (`onetree session`) takes dsh from the
+plugin's payload, as the guard does.
+
+What stays: the web UI lists the session under the folder it was created in
+(dsh fixes that when the session is made), so its file pane shows the main
+checkout while the agent's commands, edits and commits happen in the worktree.
+A session that only asks a question still gets a worktree; one with no commits
+goes with `gc` after the stale window.
+
 ### Sessions
 
 `onetree session` is the SessionStart hook for all four agents. It tells a
@@ -467,7 +495,7 @@ Claude shell is Codex), the host by its environment:
 | Codex CLI | `cd <path> &&` before every command (the hook sees the command, never `workdir`) and absolute `apply_patch` paths; the user can move the thread with `/cd <path>` |
 | Codex app | the same; the thread's review pane stays where it started, so a new thread on the path reviews the work |
 | pi | nothing: the extension runs the session's commands in the worktree from then on |
-| dsh | `workdir` on every bash call and absolute paths for file tools; the web UI keeps the session under the mirror |
+| dsh | nothing when the plugin moved the session's working directory into the worktree (it does at session start and resume); otherwise `workdir` on every bash call and absolute paths for file tools. The web UI keeps the session under the mirror either way |
 
 `new` records which session made the worktree (`agent`, `host`, `session`,
 `pid`), so a guard refusal in the mirror names that session's newest worktree.
@@ -498,9 +526,13 @@ dsh's `workspace-write` sandbox, the headless default, has the same limit, and
 takes grants while it runs. So the plugin grants a session whose folder is a
 worktree the same folders (`onetree codex-grants`), once per live session and
 again after a resume, through dsh's `sandboxPolicy.registerWritableRoot`: every
-dsh profile gets them with no launch flag. A session in a main checkout is
-granted nothing, and a sandboxed session still cannot make a second worktree:
-`onetree new` says so.
+dsh profile gets them with no launch flag. A session whose folder is a guarded
+main checkout is granted the worktree the plugin made for it and that
+worktree's git folders, by real path (dsh refuses a symlinked grant); a
+session in any other main checkout is granted nothing. The agent itself still
+cannot make a worktree from inside the sandbox (`onetree new` says so): the
+plugin makes the session's one, and a second worktree for the same session
+needs a terminal.
 
 Under either sandbox git prints `error: Unable to create
 '<main>/.git/packed-refs.lock': Operation not permitted` on each commit. The

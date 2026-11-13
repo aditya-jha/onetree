@@ -9,6 +9,24 @@
   "Couldn't move the session to …": a session that ended its turn while a
   background agent worked never moved. A `review` checkout is not recorded.
 
+- A dsh session started in the browser on a guarded main checkout gets its
+  worktree with no step by the user or the agent. Nothing made one (the web UI
+  picks the session's folder, so the shell wrapper never ran), the first script
+  was refused, and the agent could not follow the refusal: dsh's sandbox
+  stopped `onetree new` at `~/.config/onetree/config: Operation not permitted`
+  (#20). The dsh plugin now runs `onetree auto dsh` when dsh announces the
+  session, grants the session's sandbox the worktree and its git folders,
+  moves the session's working directory there and tells it once; the guard
+  judges a call in that working directory. It does this at startup, resume,
+  clear and compact. `onetree auto <agent>` with `ONETREE_SESSION_ID` (else
+  `DSH_SESSION_ID`) set binds the worktree to that session and returns the
+  same one when asked again; the shell wrappers are unchanged. The plugin's
+  session hint had never been shown: it listened to `agent/session-start`,
+  which dsh does not emit (the event is `agent/created`). The hint and a
+  refusal now say "this session works in <worktree>" once it is moved, and no
+  longer that a dsh session cannot change its folder. The web UI still lists
+  the session under the folder it was created in. Run `onetree update` to
+  rewrite the plugin.
 - A sandboxed dsh can commit in its worktree. dsh's `workspace-write` sandbox
   (the headless default) kept the worktree's git directory read-only, so
   `git commit` failed on `index.lock`; onetree granted those folders to Codex

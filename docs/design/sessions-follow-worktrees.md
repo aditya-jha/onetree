@@ -1,6 +1,6 @@
 # Sessions follow their worktree
 
-**Status:** shipped; revised 2026-11-13: the Claude CLI no longer moves with `EnterWorktree` (see "What was dropped").
+**Status:** shipped; revised 2026-11-13: the Claude CLI no longer moves with `EnterWorktree` (see "What was dropped"), and a dsh session is moved by onetree's plugin ([dsh-session-worktree.md](dsh-session-worktree.md)).
 
 **In one line:** where onetree can, it starts an agent inside its worktree.
 Where it can't, it tells the agent exactly how to work there.
@@ -25,7 +25,7 @@ that, without telling the host.
 | Codex CLI | only if the user types `/cd`, which starts a new thread | instructions, resume list, sandbox |
 | Codex app | no; the user opens a new thread on the worktree | review pane, sandbox |
 | pi | no | resume list, project trust |
-| dsh | no | web UI workspace, sandbox |
+| dsh | its working directory yes (a plugin can set it), its folder no | web UI workspace, the sandbox's own root |
 
 ## The decision
 

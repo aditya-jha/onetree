@@ -1030,8 +1030,14 @@ json_is "launch: in a guarded mirror an agent starts in a fresh worktree onetree
    and .b == {argv: ["exec", "hi"], cwd: "'"$CW"'"} and .c == {argv: ["hi"], cwd: "'"$TMP"'/plain-dir"}
    and .d == {argv: ["-p", "go"], cwd: "'"$TMP"'/cw-worktrees/cw-main/job-1"}
    and (.e.cwd | startswith("'"$TMP"'/cw-worktrees/cw-main/claude-")) and .e.argv == ["hi"]
-   and .et == {"'"$CW"'": {hasTrustDialogAccepted: true}, "'"$TMP"'/cw-worktrees/cw-main": {hasTrustDialogAccepted: true}}
+   and .et["'"$CW"'"].hasTrustDialogAccepted and .et["'"$TMP"'/cw-worktrees/cw-main"].hasTrustDialogAccepted
+   and (.et | del(.["'"$CW"'"], .["'"$TMP"'/cw-worktrees/cw-main"]) | keys | all(startswith("'"$TMP"'/cw-worktrees/cw-main/claude-")))
    and (.f.cwd | startswith("'"$TMP"'/cw-worktrees/cw-main/claude-")) and .f.argv == ["hi"] and .ft == null'
+jq -n --arg p "$CW" '{projects: {($p): {hasTrustDialogAccepted: true}}, numStartups: 7}' > "$HOME/.claude.json"
+tw=$($ONETREE new trust-wt "$CW" 2>/dev/null); tn=$($ONETREE new trust-no "$MAIN" 2>/dev/null)
+eq "new: a worktree of a checkout Claude trusts is recorded as trusted by its own path (the desktop app moves a session there without asking), the rest of Claude's file is kept, and a checkout Claude does not trust gets no record" \
+  "$(jq -c --arg w "$tw" --arg n "$tn" '[.projects[$w].hasTrustDialogAccepted, (.projects | has($n)), .numStartups]' "$HOME/.claude.json")" '[true,false,7]'
+rm -f "$HOME/.claude.json"
 
 # ---- gc leaves other tools' worktrees to them; an unmarked worktree under onetree's root is still onetree's
 git -C "$CW" worktree add -q --detach "$TMP/codex-home/worktrees/ab12/cw-main" origin/main

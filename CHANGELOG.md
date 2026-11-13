@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- `onetree new` and `carry` record the new worktree as trusted in
+  `~/.claude.json` when Claude already trusts its main checkout. The Claude
+  desktop app asked for workspace trust on every `change_directory` into a
+  worktree, and after five minutes without an answer the move failed with
+  "Couldn't move the session to …": a session that ended its turn while a
+  background agent worked never moved. A `review` checkout is not recorded.
+
 - A sandboxed dsh can commit in its worktree. dsh's `workspace-write` sandbox
   (the headless default) kept the worktree's git directory read-only, so
   `git commit` failed on `index.lock`; onetree granted those folders to Codex

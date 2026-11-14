@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- dsh: a session can make another worktree of its repository. The dsh plugin
+  registers an `onetree_new` tool that runs `onetree new` outside dsh's
+  sandbox, bound to the session, and opens the worktree in the session's
+  sandbox; the session keeps its working directory and works there through
+  `workdir`. The plugin also opens a worktree of the session's repository
+  that a call names, and gc keeps every worktree a loaded session opened.
+  Refusals, the session hint and the rules point dsh at the tool and at
+  `workdir`, not `cd` (#24).
+- `onetree new` tries each place it writes before git does anything (the
+  main's git directory, the worktree's folder, the global config when it must
+  change) and names the one it cannot write. It no longer rewrites the global
+  config on every run: a sandboxed agent cannot write it, so `new` failed with
+  `could not lock config file` (#24).
+- dsh: gc's session records are written one at a time under a lock: two
+  writes started together (a worktree opened as the working directory moved)
+  could drop one's fields. Recording a session no longer clears its archived
+  mark.
+
 - `onetree gc` keeps a worktree a dsh session works in. dsh runs every session
   in one server process outside the worktree, so gc never saw one and could
   remove the worktree under an open session after the stale window. The dsh

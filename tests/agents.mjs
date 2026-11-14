@@ -73,7 +73,7 @@ async function pi(opts = {}) {
 // sandbox policy records grants (and takes one back through the disposer it returns; host.refuse makes it throw for a directory), and the
 // working directory is kept per session id (host.dirs), as dsh keeps it across a resume. opts.without names services the profile lacks
 async function dsh(opts = {}) {
-  const on = {}, grants = [], moves = [], dirs = new Map(), host = { refuse: () => false };
+  const on = {}, grants = [], moves = [], dirs = new Map(), host = { refuse: () => false, tools: {} };
   const mod = await load(plugin, opts.onetree);
   const workingDirectory = {
     get: session => dirs.get(session.header.id) || session.header.cwd,
@@ -85,7 +85,8 @@ async function dsh(opts = {}) {
     const entry = [session.header.id, dir]; grants.push(entry);
     return () => grants.splice(grants.indexOf(entry), 1);
   } };
-  const services = opts.bare ? {} : { workingDirectory, sandboxPolicy };
+  const tools = { register: def => { host.tools[def.name] = def; return () => delete host.tools[def.name]; } };
+  const services = opts.bare ? {} : { workingDirectory, sandboxPolicy, tools };
   for (const name of opts.without || []) delete services[name];
   mod.apply({ on: (ev, fn) => (on[ev] = fn), inject: (names, fn) => { if (names.every(name => services[name])) fn(services); } });
   const session = (id, cwd = mirror, more = {}) => {   // a new session object each time, as after a resume
@@ -130,7 +131,7 @@ const gitDirs = (host, id) => host.grants.filter(g => g[0] === id).map(g => g[1]
   const inTree = host.session("dsh-wt", worktree);
   await host.call("read", {}, inTree);
   await host.created(inTree, "resume");
-  out.dshGrants = host.grants;
+  out.dshGrants = host.grants.filter(g => g[0] === "dsh-wt");   // the calls above named worktrees of their own repo, and have them open too
   out.dshInTree = { made: trees() - before, moves: host.moves, injected: inTree.injected };
 }
 // dsh: a session announced in the guarded main checkout gets a worktree, the grants for it, its working directory moved there and one message
@@ -148,9 +149,9 @@ const gitDirs = (host, id) => host.grants.filter(g => g[0] === id).map(g => g[1]
     inMain: await host.call("bash", { command: "git stash", workdir: mirror }, first),
   };
   // gc's record: where the session works and where dsh keeps its lock; archiving marks it, unarchiving clears the mark
-  const rec = record("dsh-web"), marks = [rec.archived];
-  host.on["workspace/session-archived"]({ sessionId: "dsh-web" }); await until(() => record("dsh-web").archived === true); marks.push(record("dsh-web").archived);
-  host.on["workspace/session-unarchiving"]({ sessionId: "dsh-web" }); await until(() => record("dsh-web").archived === false); marks.push(record("dsh-web").archived);
+  const rec = record("dsh-web"), marks = [rec.archived === true];
+  host.on["workspace/session-archived"]({ sessionId: "dsh-web" }); await until(() => record("dsh-web").archived === true); marks.push(record("dsh-web").archived === true);
+  host.on["workspace/session-unarchiving"]({ sessionId: "dsh-web" }); await until(() => record("dsh-web").archived === false); marks.push(record("dsh-web").archived === true);
   out.dshRecord = { cwd: rec.cwd === tree, sessions: rec.sessions === join(process.env.HOME, ".dsh", "sessions"), marks, keptCwd: record("dsh-web").cwd === tree };
   // a resume: a new session object, the working directory dsh kept
   const grantsBefore = host.grants.length;
@@ -196,6 +197,44 @@ const gitDirs = (host, id) => host.grants.filter(g => g[0] === id).map(g => g[1]
   const before = trees();
   const agent = await host.created(host.session("dsh-bare"));
   out.dshBare = { made: trees() - before, injected: agent.injected, plain: await host.call("bash", { command: "git stash" }, agent), inTree: await host.call("bash", { command: "git stash", workdir: out.pi.worktree }, agent) };
+}
+// dsh: another worktree for a session comes from the plugin's onetree_new tool, made outside the sandbox (#24): opened, recorded for gc,
+// bound to the session, and the session stays where it works. A worktree a call names is opened when it is of the session's repository
+{
+  const host = await dsh();
+  const agent = await host.created(host.session("dsh-tool"));
+  const home = (host.moves[0] || [])[1] || "";
+  const exec = { agent, signal: new AbortController().signal };
+  const make = async slug => { try { return { text: await host.tools.onetree_new.execute({ slug }, exec) }; } catch (e) { return { error: String(e.message) }; } };
+  const start = trees(), moves = host.moves.length;
+  const first = await make("tool-a"), again = await make("tool-a");
+  const made = (/The worktree (\S+) on the branch/.exec(first.text || "") || [])[1] || "";
+  await until(() => (record("dsh-tool").opened || []).includes(made));
+  const ev = spawnSync(onetree, ["events", "--json", "--kind", "new"], { encoding: "utf8" }).stdout;
+  out.dshTool = {
+    made: trees() - start, same: again.text === first.text, moved: host.moves.length - moves, cwd: host.dirs.get("dsh-tool") === home,
+    granted: host.grants.some(g => g[0] === "dsh-tool" && g[1] === made), opened: [home, made].every(d => (record("dsh-tool").opened || []).includes(d)),
+    bound: JSON.parse(ev || "[]").some(e => e.path === made && e.session === "dsh-tool" && e.agent === "dsh"),
+    next: (first.text || "").includes("pass `workdir` " + made + " to every bash call"), bad: (await make("../x")).error || "",
+  };
+  // named by a call: a worktree of this repository is opened (here one made by a pi session), one of another repository is not
+  const own = realpathSync(out.pi.worktree), foreign = join(process.env.HOME, "foreign-tree");
+  spawnSync("git", ["-C", untrusted, "worktree", "add", "-q", "--detach", foreign], { encoding: "utf8" });
+  const has = d => host.grants.some(g => g[0] === "dsh-tool" && g[1] === realpathSync(d));
+  const before = { own: has(own), foreign: has(foreign) };
+  await host.call("bash", { command: "ls", workdir: own }, agent);
+  await host.call("write", { file_path: join(foreign, "new-dir", "a.txt") }, agent);
+  out.dshNamed = { before, after: { own: has(own), foreign: has(foreign) } };
+  // onetree new fails: the tool says why, and nothing is opened
+  const stub = join(process.env.HOME, "onetree-new-fails");
+  writeFileSync(stub, `#!/bin/sh\n[ "$1" = new ] && { echo "error: cannot reach origin" >&2; exit 1; }\nexec "${onetree}" "$@"\n`);
+  chmodSync(stub, 0o755);
+  const failing = await dsh({ onetree: stub });
+  const fagent = await failing.created(failing.session("dsh-tool-fails"));
+  const grants = failing.grants.length;
+  let error = "";
+  try { await failing.tools.onetree_new.execute({ slug: "tool-f" }, { agent: fagent, signal: new AbortController().signal }); } catch (e) { error = String(e.message); }
+  out.dshToolFails = { error, grants: failing.grants.length - grants };
 }
 // dsh: a session is moved only into a worktree its sandbox is open to. While the grants cannot be made (codex-grants fails, or lists nothing,
 // or the sandbox refuses one directory) it stays, holds no partial grant and is told why; the next tool call tries again, and then it moves

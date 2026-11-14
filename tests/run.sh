@@ -269,10 +269,18 @@ printf '%s\n' '#!/bin/sh' 'echo "$*" >> "$GH_LOG"' 'exit 0' > "$TMP/bin/gh"
 git -C "$MAIN" config onetree.stale 0   # old enough to go, so only a working session keeps it
 DS=$TMP/dsh-home/sessions; for s in held cold; do mkdir -p "$DS/--proj--/session-$s"; : > "$DS/--proj--/session-$s/session.lock"; done
 ( exec 8<"$DS/--proj--/session-held/session.lock"; sleep 60 ) & HOLD=$!; sleep 0.3
-dsh_rec() { rm -rf "$ONETREE_SESSIONS/dsh"; [[ -z "$1" ]] || printf '{"session_id":"session-%s","agent":"dsh","cwd":"%s","dsh_sessions":"%s","archived":%s}' "$1" "$2" "$DS" "$3" | $ONETREE session >/dev/null 2>&1 || true
+dsh_rec() { rm -rf "$ONETREE_SESSIONS/dsh"; [[ -z "$1" ]] || printf '{"session_id":"session-%s","agent":"dsh","cwd":"%s","dsh_sessions":"%s","archived":%s,"opened":%s}' "$1" "$2" "$DS" "$3" "${4:-[]}" | $ONETREE session >/dev/null 2>&1 || true
   $ONETREE gc --dry-run --json "$MAIN" | jq -r '.[] | select(.slug == "feat-a") | .gc.code'; }
-eq "gc: a dsh session keeps its worktree while its lock is open and it is not archived; a record alone, or an archived session, keeps nothing" \
-  "$(dsh_rec) $(dsh_rec held "$p" false) $(dsh_rec held "$p/src" false) $(dsh_rec held "$p" true) $(dsh_rec cold "$p" false)" "in-integration live live in-integration in-integration"
+eq "gc: a dsh session keeps its worktree, and every worktree it opened, while its lock is open and it is not archived; a record alone, or an archived session, keeps nothing" \
+  "$(dsh_rec) $(dsh_rec held "$p" false) $(dsh_rec held "$p/src" false) $(dsh_rec held "$TMP" false "[\"$p\"]") $(dsh_rec held "$p" true) $(dsh_rec cold "$TMP" false "[\"$p\"]")" "in-integration live live live in-integration in-integration"
+# the plugin starts several writes of one record at once; each merges into the last, under a lock; archived changes only when sent
+rm -rf "$ONETREE_SESSIONS/dsh"; mkdir -p "$ONETREE_SESSIONS/dsh/session-lk.json.lock"
+printf '{"session_id":"session-lk","agent":"dsh","cwd":"%s","dsh_sessions":"%s","archived":true}' "$p" "$DS" | $ONETREE session >/dev/null 2>&1 & LKW=$!
+sleep 0.5; lk_held=$([[ -f "$ONETREE_SESSIONS/dsh/session-lk.json" ]] && echo written || echo waited)
+rmdir "$ONETREE_SESSIONS/dsh/session-lk.json.lock" 2>/dev/null || true; wait $LKW || true
+printf '{"session_id":"session-lk","agent":"dsh","opened":["%s"]}' "$p" | $ONETREE session >/dev/null 2>&1 || true
+eq "dsh: a record write waits for the lock, merges into the last one, and leaves archived alone unless it sends it" \
+  "$lk_held $(jq -c '[.cwd == "'"$p"'", .opened == ["'"$p"'"], .archived]' "$ONETREE_SESSIONS/dsh/session-lk.json")" "waited [true,true,true]"
 dsh_rec cold "$TMP/gone" false >/dev/null
 eq "gc: a dsh record whose lock is not open and whose folder is gone is dropped" "$(ls "$ONETREE_SESSIONS/dsh" | wc -l | tr -d ' ')" "0"
 kill $HOLD 2>/dev/null; wait $HOLD 2>/dev/null || true; rm -rf "$ONETREE_SESSIONS/dsh"; git -C "$MAIN" config --unset onetree.stale
@@ -977,6 +985,19 @@ eq "new: stdout is the path, and the next step fits the agent that ran it (Claud
 chmod u-w "$CW/.git"; sb=$($ONETREE new sandboxed "$CW" 2>&1 || true); chmod u+w "$CW/.git"
 eq "new: where the main's .git cannot be written (a sandboxed agent session) it says so and how to start a session for the task, and makes nothing" \
   "$(grep -c "cannot write $CW/.git, so no worktree can be made from here.*onetree launch --task sandboxed <agent>" <<<"$sb") $([[ -e "$TMP/cw-worktrees/cw-main/sandboxed" ]] && echo made || echo none)" "1 none"
+# a sandbox refuses writes the mode bits allow, so new tries each place it writes before git does anything (#24): the
+# folder the worktree goes in, and the global config, which it writes only when the guarded list changes
+mkdir -p "$TMP/rocfg"; cp "$ONETREE_CONFIG" "$TMP/rocfg/config"; chmod a-w "$TMP/rocfg/config" "$TMP/rocfg"
+git clone -q origin.git ro-unreg 2>/dev/null
+ro_new() { { ONETREE_CONFIG=$TMP/rocfg/config "$@" >/dev/null; } 2>&1 && echo made || true; }
+chmod u-w "$TMP/cw-worktrees/cw-main"
+nr=$(ro_new $ONETREE new sb-root "$CW"); nd=$(DSH_SESSION_ID=s-dsh-sb ro_new $ONETREE new sb-root "$CW")
+chmod u+w "$TMP/cw-worktrees/cw-main"
+nc=$(ro_new $ONETREE new sb-cfg "$CW"); nu=$(ro_new $ONETREE new sb-unreg "$TMP/ro-unreg")
+chmod u+w "$TMP/rocfg" "$TMP/rocfg/config"
+eq "new: tries every place it writes first, and names the one it cannot write: the worktree folder (dsh is told to call onetree_new), the global config only when it must change; nothing is made" \
+  "$(grep -c "cannot write $TMP/cw-worktrees/cw-main, so no worktree can be made from here" <<<"$nr") $(grep -c "cannot write $TMP/cw-worktrees/cw-main, so no worktree can be made from inside dsh's sandbox\. call the .onetree_new. tool with slug sb-root" <<<"$nd") $(git -C "$CW" show-ref -q --verify refs/heads/feature/sb-root && echo branch || echo no-branch) | $(tail -1 <<<"$nc") $([[ -d "$TMP/cw-worktrees/cw-main/sb-cfg" ]] && echo there) | $(grep -c "cannot write $TMP/rocfg/config" <<<"$nu")" \
+  "1 1 no-branch | made there | 1"
 hc_out=$(jq -nc --arg cwd "$MAIN" '{name: "hc-a", cwd: $cwd}' | ONETREE_HOST=claude-app $ONETREE hook-create 2>"$TMP/hc-err")
 eq "hook-create: Claude's worktree in a registered repo is onetree's, and a hook prints no next step" "$hc_out $(grep -c '^onetree: next' "$TMP/hc-err")" "$TMP/worktrees/main/hc-a 0"
 b1=$(CLAUDE_CODE_SESSION_ID=s-bind ONETREE_SESSION_PID=$HC $ONETREE new bind-1 "$CW" 2>/dev/null)
@@ -1008,7 +1029,10 @@ eq "codex-grants: a folder it must list that cannot be made is a failure that na
 dsh_hint() { (cd "$CW" && jq -nc --arg cwd "$1" '{session_id: "s-dsh-web", cwd: $cwd, agent: "dsh"}' | ONETREE_HOST=claude-cli $ONETREE session); }   # the payload says dsh, whatever the process looks like
 gm=$({ jq -nc --arg cwd "$bd" --arg wd "$CW" '{tool_name: "Bash", cwd: $cwd, session_id: "s-dsh-web", agent: "dsh", tool_input: {command: "git stash", workdir: $wd}}' | ONETREE_NO_EVENTS=1 $ONETREE guard >/dev/null; } 2>&1 || true)
 eq "dsh: the session hint and a refusal go by the working directory the plugin sends, not by who made a worktree: in the main checkout (make one, then pass workdir), and inside a worktree of it (this session works there, named with its branch; a call sent back to the main checkout is told to leave workdir out)" \
-  "$(dsh_hint "$CW" | grep -c 'run `onetree new <slug>`, then pass `workdir` <path> to every bash call') $(dsh_hint "$bd" | grep -c "this session works in a worktree of it, $bd, on the branch feature/bind-dsh:.*There, leave .workdir. out of bash calls.*this session works in $bd,") $(grep -c "already has a worktree, $bd: do it there. To work there, leave .workdir. out of bash calls.*this session works in $bd," <<<"$gm")" "1 1 1"
+  "$(dsh_hint "$CW" | grep -c 'call the `onetree_new` tool with slug <slug>: .*, then pass `workdir` <path> to every bash call') $(dsh_hint "$bd" | grep -c "this session works in a worktree of it, $bd, on the branch feature/bind-dsh:.*There, leave .workdir. out of bash calls.*this session works in $bd,") $(grep -c "already has a worktree, $bd: do it there. To work there, leave .workdir. out of bash calls.*this session works in $bd," <<<"$gm")" "1 1 1"
+gt=$({ jq -nc --arg cwd "$CW" '{tool_name: "Bash", cwd: $cwd, session_id: "s-dsh-none", agent: "dsh", tool_input: {command: "git stash"}}' | ONETREE_NO_EVENTS=1 $ONETREE guard >/dev/null; } 2>&1 || true)
+eq "dsh: a refusal for a session with no worktree says to call the onetree_new tool (dsh's sandbox cannot run onetree new), then pass workdir" \
+  "$(grep -c 'Work in a worktree instead: call the `onetree_new` tool with slug <slug>: .*, then pass `workdir` <path> to every bash call' <<<"$gt")" "1"
 kill $HC $HX $HY $HP $HD 2>/dev/null; wait $HC $HX $HY $HP $HD 2>/dev/null || true
 eq "session hint and rules: each host is told its own way in" \
   "$(cd "$CW" && ONETREE_HOST=claude-app $ONETREE session </dev/null | grep -c 'call `change_directory` with <path>') $(cd "$CW" && ONETREE_HOST=codex-cli $ONETREE session </dev/null | grep -c 'type `/cd <path>`') $($ONETREE rules | grep -cE '`change_directory` with the path|`/cd <worktree>`') $($ONETREE snippet "$CW" | grep -c 'Claude desktop app: call `change_directory`')" "1 1 2 1"
@@ -1082,16 +1106,22 @@ if [[ -n "$NODE" ]] && "$NODE" -e 'process.exit(Number(process.versions.node.spl
     '.dshResumeClosed | .tree as $t | (.injected | length == 1) and (.injected[0] | contains("sandbox could not be opened for the worktree this session works in, " + $t + " (`onetree codex-grants` failed)") and contains("tries again before each tool call"))
      and .bash == "allow" and .newGrants == 0 and .after == "allow" and .granted == 7'
   json_is "dsh: when auto fails the session stays where it is, with no grant and no move, is told what failed and what to do by hand, and is still guarded; announced again once auto works, it gets its worktree, grants and move" "$ag" \
-    '.dshFails | .made == 0 and .moves == [] and .grants == [] and .plain == "deny" and (.injected | length == 1) and (.injected[0].text | test("could not make a worktree for this session \\(error: bootstrap failed; rolled back new worktree\\), so it stays in .*cw-main, the read-only main checkout") and test("run `onetree new <slug>`, then pass `workdir`"))
+    '.dshFails | .made == 0 and .moves == [] and .grants == [] and .plain == "deny" and (.injected | length == 1) and (.injected[0].text | test("could not make a worktree for this session \\(error: bootstrap failed; rolled back new worktree\\), so it stays in .*cw-main, the read-only main checkout") and test("call the `onetree_new` tool with slug <slug>: .*, then pass `workdir`"))
      and .retry == {moves: 1, granted: 1, gitDirs: 6}'
   json_is "dsh: a session is moved only into a worktree its sandbox is open to: while codex-grants fails or lists nothing, or the sandbox refuses one directory, it is not moved, holds no partial grant and is told once where the worktree was made, why it was not moved and that it is tried again; the next tool call tries again, and then it is granted everything once and moved into that same worktree" "$ag" \
     '.dshClosed | [.fails, .empty, .refused] | all(.before.moves == 0 and .before.grants == 0 and .before.plain == "deny" and .before.read == "allow" and (.before.injected | length == 1)
        and (.before.injected[0] | test("^onetree: a worktree for this session was made at .*/cw-main/dsh-[0-9]{6}-[0-9]{6}(-[0-9]+)?, but the session was not moved into it \\(dsh.s sandbox could not be opened for it: (`onetree codex-grants` failed|`onetree codex-grants` listed no git folders for it|the sandbox refuses .*/objects)\\), so it stays in .*/cw-main, the read-only main checkout\\. onetree tries again before each tool call\\.$"))
        and .after == "allow" and .made == 1 and .moves == 1 and .granted == 1 and .gitDirs == 6 and .all == 7)'
+  json_is "dsh: the onetree_new tool makes another worktree outside the sandbox: opened in the session's sandbox, recorded for gc with the session's own, bound to the session, the same one for the same slug, and the session stays where it works; a bad slug is refused" "$ag" \
+    '.dshTool == {made: 1, same: true, moved: 0, cwd: true, granted: true, opened: true, bound: true, next: true, bad: "slug: letters, digits, . _ - only, starting with a letter or digit"}'
+  json_is "dsh: a worktree a call names (bash workdir, a file tool's path) is opened when it is of the session's repository, never one of another repository" "$ag" \
+    '.dshNamed == {before: {own: false, foreign: false}, after: {own: true, foreign: false}}'
+  json_is "dsh: when onetree new fails, the tool says what failed and opens nothing" "$ag" \
+    '.dshToolFails == {error: "onetree could not make the worktree: error: cannot reach origin", grants: 0}'
   json_is "dsh: a profile with no sandbox policy has nothing to open, and its session is moved into the worktree all the same" "$ag" \
     '.dshNoSandbox == {moves: 1, grants: 0, plain: "allow"}'
   json_is "dsh: a profile without the sandbox policy and the working-directory service gets the guard and the hint only: no worktree is made, the session is told how to work in one, a plain command is judged in the main checkout and one with workdir in a worktree passes" "$ag" \
-    '.dshBare | .made == 0 and (.injected | length == 1) and (.injected[0].text | contains("run `onetree new <slug>`, then pass `workdir` <path> to every bash call")) and .plain == "deny" and .inTree == "allow"'
+    '.dshBare | .made == 0 and (.injected | length == 1) and (.injected[0].text | test("call the `onetree_new` tool with slug <slug>: .*, then pass `workdir` <path> to every bash call")) and .plain == "deny" and .inTree == "allow"'
 elif [[ -n "${CI:-}" ]]; then bad "pi and dsh: node 22 or newer is required in CI"
 else printf 'skip  pi and dsh: node 22 or newer is unavailable\n'; fi
 gw=$($ONETREE new grants-a "$CW" 2>/dev/null); git -C "$CW" worktree add -q -b plain "$TMP/plain-tree" origin/main

@@ -1639,6 +1639,14 @@ ut rel-dev/bin/onetree install >/dev/null; ut "$UH/.local/bin/onetree" update >/
 eq "update (contributor clone): fast-forwards its branch, unreleased commits too, and reinstalls" "$(git -C rel-dev symbolic-ref --short HEAD) $(ut "$UH/.local/bin/onetree" version)" "main onetree 1.11.0-dev"
 eq "version: a clone off a tag adds (dev <short sha>); a clone at a tag and the installed copy do not" \
   "$(rel-dev/bin/onetree version) / $(rel-install/bin/onetree version) / $(ut "$UH/.local/bin/onetree" version)" "onetree 1.11.0-dev (dev $(git -C rel-dev rev-parse --short HEAD)) / onetree 1.10.0 / onetree 1.11.0-dev"
+sed -i.bak 's/^VERSION=.*/VERSION=9.9.9-wip/' rel-dev/bin/onetree; rm -f rel-dev/bin/onetree.bak
+eq "update (contributor clone): uncommitted changes are named and refused, not installed" \
+  "$(ut "$UH/.local/bin/onetree" update 2>&1 | grep -c 'uncommitted changes (bin/onetree)') $(ut "$UH/.local/bin/onetree" version) $(grep -c '^VERSION=9.9.9-wip$' rel-dev/bin/onetree)" "1 onetree 1.11.0-dev 1"
+git -C rel-dev checkout -q -- bin/onetree; ut "$UH/.local/bin/onetree" init --guard "$TMP/rel-dev" >/dev/null 2>&1
+sed "s/^VERSION=.*/VERSION=1.12.0-dev/" "$ONETREE" > rel-src/bin/onetree; ( cd rel-src && git commit -qam 1.12.0-dev && git push -q origin HEAD:main )
+ut "$UH/.local/bin/onetree" update >/dev/null 2>&1 || true
+eq "update (guarded contributor clone): parks it onto the new commit, locks it again, and reinstalls" \
+  "$(ut "$UH/.local/bin/onetree" version) $([[ -w rel-dev/bin/onetree ]] && echo writable || echo locked)" "onetree 1.12.0-dev locked"
 cp rel-src/bin/onetree "$TMP/brew/Cellar/onetree/1.9.0/libexec/bin/"; ut "$TMP/brew/Cellar/onetree/1.9.0/libexec/bin/onetree" install >/dev/null
 eq "update (Homebrew install, source under the brew prefix): changes nothing, prints the brew command, exits 0" \
   "$(ut "$UH/.local/bin/onetree" update; echo "exit $?")" "onetree: installed with Homebrew; update with: brew upgrade onetree && $TMP/brew/bin/onetree install"$'\n'"exit 0"

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- `onetree gc` no longer removes a fresh worktree as merged. A worktree with
+  no commits of its own sits on a `main` commit, and every PR cut from `main`
+  later contains it, so gc read it as "inside a merged PR" and removed it
+  within the hour instead of after the stale window: a dsh session left open
+  lost its worktree and was put back in the read-only main checkout.
+
 - `onetree guard`, which runs before every agent tool call, reads the list of
   guarded checkouts once instead of up to three times: about 77 ms a call instead of 108 ms
   on macOS, where each git start goes through the xcrun shim (#28).

@@ -1594,8 +1594,9 @@ remove_one() {
   [[ "$pr" == MERGED && "$prhead" == "$head" ]] && { merged=1; ghmerged=1; }
   # local head behind the merged head
   if [[ "$pr" == MERGED && $ghmerged == 0 ]] && git -C "$path" cat-file -e "$prhead^{commit}" 2>/dev/null && git -C "$path" merge-base --is-ancestor HEAD "$prhead" 2>/dev/null; then merged=1; ghmerged=1; fi
-  # branch never had a PR: is its head inside some merged PR?
-  if [[ "$pr" == NONE && "$branch" != "(detached)" ]]; then
+  # branch never had a PR: is its head inside some merged PR? Not asked of a head already in the integration branch: it
+  # holds nothing of its own (a fresh worktree), every later PR contains it, and its age decides below
+  if [[ "$pr" == NONE && "$branch" != "(detached)" ]] && ! git -C "$path" merge-base --is-ancestor HEAD "$RB/$int" 2>/dev/null; then
     local mh heads; heads=$(merged_heads "$main")
     if [[ -n "$heads" ]]; then   # one git call finds which merged heads this checkout has at all; only those are tested
       for mh in $(printf '%s\n' "$heads" | git -C "$path" cat-file --batch-check='%(objectname) %(objecttype)' 2>/dev/null | awk '$2 == "commit" { print $1 }'); do

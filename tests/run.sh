@@ -265,6 +265,17 @@ later=$(git -C "$p" commit-tree -p "$(git -C "$p" rev-parse HEAD)" -m later "$(g
 printf '%s\n' '#!/bin/sh' 'echo "$*" >> "$GH_LOG"' "case \"\$*\" in *'--state merged'*) echo $later ;; esac" > "$TMP/bin/gh"
 json_is "gc: a fresh worktree stays young when a later merged PR contains its head" "$($ONETREE gc --dry-run --json --fresh "$MAIN")" '.[0].slug == "feat-a" and .[0].gc.code == "young"'
 printf '%s\n' '#!/bin/sh' 'echo "$*" >> "$GH_LOG"' 'exit 0' > "$TMP/bin/gh"
+# dsh runs every session in one server process outside the worktree; a session it has loaded holds its session.lock open (issue #35)
+git -C "$MAIN" config onetree.stale 0   # old enough to go, so only a working session keeps it
+DS=$TMP/dsh-home/sessions; for s in held cold; do mkdir -p "$DS/--proj--/session-$s"; : > "$DS/--proj--/session-$s/session.lock"; done
+( exec 8<"$DS/--proj--/session-held/session.lock"; sleep 60 ) & HOLD=$!; sleep 0.3
+dsh_rec() { rm -rf "$ONETREE_SESSIONS/dsh"; [[ -z "$1" ]] || printf '{"session_id":"session-%s","agent":"dsh","cwd":"%s","dsh_sessions":"%s","archived":%s}' "$1" "$2" "$DS" "$3" | $ONETREE session >/dev/null 2>&1 || true
+  $ONETREE gc --dry-run --json "$MAIN" | jq -r '.[] | select(.slug == "feat-a") | .gc.code'; }
+eq "gc: a dsh session keeps its worktree while its lock is open and it is not archived; a record alone, or an archived session, keeps nothing" \
+  "$(dsh_rec) $(dsh_rec held "$p" false) $(dsh_rec held "$p/src" false) $(dsh_rec held "$p" true) $(dsh_rec cold "$p" false)" "in-integration live live in-integration in-integration"
+dsh_rec cold "$TMP/gone" false >/dev/null
+eq "gc: a dsh record whose lock is not open and whose folder is gone is dropped" "$(ls "$ONETREE_SESSIONS/dsh" | wc -l | tr -d ' ')" "0"
+kill $HOLD 2>/dev/null; wait $HOLD 2>/dev/null || true; rm -rf "$ONETREE_SESSIONS/dsh"; git -C "$MAIN" config --unset onetree.stale
 has "gc --dry-run (text): the keep line gc has always logged" "$($ONETREE gc --dry-run "$MAIN")" "^keep $TMP/worktrees/main/feat-a: no merged PR and younger than 24h\$"
 echo dirt > "$p/dirt"
 json_is "gc: dirty worktree kept with code dirty" "$($ONETREE gc --dry-run --json "$MAIN")" '.[0].gc.code == "dirty" and .[0].dirty == 1'
@@ -1063,8 +1074,10 @@ if [[ -n "$NODE" ]] && "$NODE" -e 'process.exit(Number(process.versions.node.spl
     '.dshFork == {made: 1, moves: 1, granted: true, gitDirs: 6}'
   json_is "dsh: a subagent dsh left in the folder of its header is put in its parent's working directory and granted there, with no worktree of its own; one whose parent is not known stays where it is, also without one" "$ag" \
     '.dshAuto.tree as $t | .dshChild == {made: 1, moved: [["dsh-child", $t]], granted: true, gitDirs: 6, orphan: 0}'
-  json_is "dsh: when the working directory moves to another worktree during a session, that worktree is opened on the next tool call" "$ag" \
-    '.dshElsewhere == {before: false, after: true}'
+  json_is "dsh: when the working directory moves to another worktree during a session, that worktree is opened and recorded for gc on the next tool call" "$ag" \
+    '.dshElsewhere == {before: false, after: true, recorded: true}'
+  json_is "dsh: gc's record of a session holds its worktree and dsh's sessions folder; archiving marks it and unarchiving clears the mark, keeping the folder" "$ag" \
+    '.dshRecord == {cwd: true, sessions: true, marks: [false, true, false], keptCwd: true}'
   json_is "dsh: a resumed session whose worktree cannot be opened again is told so and why, holds no partial grant, and is not refused by the plugin (the sandbox is the enforcement); the first call after the grants can be made opens everything" "$ag" \
     '.dshResumeClosed | .tree as $t | (.injected | length == 1) and (.injected[0] | contains("sandbox could not be opened for the worktree this session works in, " + $t + " (`onetree codex-grants` failed)") and contains("tries again before each tool call"))
      and .bash == "allow" and .newGrants == 0 and .after == "allow" and .granted == 7'

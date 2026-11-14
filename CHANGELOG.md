@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- `onetree gc` keeps a worktree a dsh session works in. dsh runs every session
+  in one server process outside the worktree, so gc never saw one and could
+  remove the worktree under an open session after the stale window. The dsh
+  plugin now records where each session works; gc keeps the worktree while dsh
+  holds that session's `session.lock` open (it does while the session is
+  loaded) and the session is not archived (#35).
+
 - `onetree gc` no longer removes a fresh worktree as merged. A worktree with
   no commits of its own sits on a `main` commit, and every PR cut from `main`
   later contains it, so gc read it as "inside a merged PR" and removed it

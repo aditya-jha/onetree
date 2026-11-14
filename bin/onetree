@@ -817,11 +817,34 @@ lsof_prime() {
   [[ -n "$LSOF_MAP" ]] && return 0
   LSOF_MAP=$(lsof -a -d cwd -Fpcn 2>/dev/null | awk '/^p/{pid=substr($0,2)} /^c/{c=substr($0,2)} /^n/{print pid "\t" c "\t" substr($0,2)}' || true)
   [[ -n "$LSOF_MAP" ]] || LSOF_MAP=$'\t\t'
-  return 0
+  dsh_prime
 }
-live_procs() {  # number of processes whose cwd is inside $1
+live_procs() {  # number of processes whose cwd is inside $1, and of loaded dsh sessions working there
   lsof_prime
-  awk -F'\t' -v p="$1" '$3 == p || index($3, p "/") == 1 { n++ } END { print n + 0 }' <<<"$LSOF_MAP"
+  awk -F'\t' -v p="$1" '$3 == p || index($3, p "/") == 1 { n++ } END { print n + 0 }' <<<"$LSOF_MAP"$'\n'"$DSH_LIVE"
+}
+# A dsh server runs every session in one process outside the worktree, so lsof's cwd never shows them (issue #35). The
+# plugin records each session's working directory and dsh's sessions folder; dsh holds <that>/*/<id>/session.lock open
+# while the session is loaded and the kernel closes it with the process. A session is working while that lock is open
+# and the session is not archived: a record alone keeps nothing. Asked with lsof, never flock: taking the lock even
+# for an instant fails a resume that tries it then. A record whose lock is not open and whose folder is gone is dropped
+DSH_LIVE=   # "-<tab>dsh<tab>cwd" per working dsh session, once per run; subshells inherit it
+dsh_prime() {
+  [[ -n "$DSH_LIVE" ]] && return 0
+  DSH_LIVE=$'\t\t'
+  local recs sid cwd root arch l held="" locks=()
+  recs=$(cat "$SESSIONS"/dsh/*.json 2>/dev/null | jq -r 'select((.session // "") != "" and (.sessions // "") != "") | [.session, (.cwd // ""), .sessions, (.archived == true)] | @tsv' 2>/dev/null) || recs=""
+  [[ -n "$recs" ]] || return 0
+  while IFS=$'\t' read -r sid cwd root arch; do
+    for l in "$root"/*/"$sid"/session.lock; do [[ -e "$l" ]] && locks+=("$l"); done
+  done <<<"$recs"
+  [[ ${#locks[@]} -gt 0 ]] && held=$(lsof -Fn -- "${locks[@]}" 2>/dev/null | sed -n 's/^n//p' || true)
+  while IFS=$'\t' read -r sid cwd root arch; do
+    if grep -qF -- "/$sid/session.lock" <<<"$held"; then
+      [[ "$arch" == true || -z "$cwd" ]] || DSH_LIVE+=$'\n'"-"$'\t'"dsh"$'\t'"$cwd"
+    elif [[ -n "$cwd" && ! -d "$cwd" ]]; then rm -f "$SESSIONS/dsh/$sid.json"; fi
+  done <<<"$recs"
+  return 0
 }
 worktrees_of() { git -C "$1" worktree list --porcelain | awk '/^worktree /{print substr($0,10)}' | grep -vxF "$1" || true; }
 lock_of() { git -C "$1" worktree list --porcelain | awk -v p="$2" '/^worktree /{c=substr($0,10)} /^locked/&&c==p{sub(/^locked/,"");sub(/^ /,"");print "LOCKED" ($0?": "$0:"")}'; }
@@ -1012,6 +1035,14 @@ record_session() {
   { mkdir -p "$SESSIONS" && jq -cn --argjson pid "$pid" --arg session "$sid" --arg agent "$agent" --arg cwd "${cwd:-$PWD}" \
       --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson t "$(date +%s)" \
       '{pid:$pid, session:(if $session=="" then null else $session end), agent:$agent, cwd:$cwd, recordedAt:$at, recorded:$t}' > "$SESSIONS/$pid.json"; } 2>/dev/null || true
+  # dsh: one server holds every session, so each also gets its own record, for gc (dsh_prime). One without cwd (the
+  # plugin's archive mark) keeps the folder recorded before
+  if [[ "$agent" == dsh && "$sid" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    local f="$SESSIONS/dsh/$sid.json" old='{}'; [[ -f "$f" ]] && old=$(<"$f")
+    { mkdir -p "$SESSIONS/dsh" && jq -cn --argjson old "$old" --argjson new "$j" --argjson pid "$pid" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        '$old + ($new | {session: .session_id, cwd, sessions: .dsh_sessions} | with_entries(select(.value != null and .value != "")))
+         + {archived: ($new.archived == true), agent: "dsh", pid: $pid, recordedAt: $at}' > "$f.$$" && mv "$f.$$" "$f"; } 2>/dev/null || rm -f "$f.$$"
+  fi
   return 0
 }
 AGENT=
@@ -1617,7 +1648,7 @@ remove_one() {
   if [[ $force == 0 ]]; then   # each keep has a stable code (docs/snapshot.md) and the reason gc has always logged
     local owner; [[ $explicit == 0 ]] && owner=$(foreign_owner "$main" "$path") && { gc_out keep foreign "made by $owner, which removes it itself"; return 1; }
     [[ "$lock" != - ]]      && { gc_out keep locked "$lock"; return 1; }
-    [[ "$live" != 0 ]]      && { gc_out keep live "$live live process(es) inside"; return 1; }
+    [[ "$live" != 0 ]]      && { gc_out keep live "$live live process(es) or dsh session(s) inside"; return 1; }
     [[ "$dirty" != 0 ]]     && { gc_out keep dirty "$dirty uncommitted path(s)"; return 1; }
     local kf ks; local -a kfs; ks=$(tilde "$(cfg keepSource "$main" "$main")"); read -ra kfs <<<"$(cfg keep "$main" "")"
     for kf in ${kfs[@]+"${kfs[@]}"}; do   # gitignored state that git status calls clean
@@ -2554,15 +2585,27 @@ render_dsh_plugin() {
 import { execFile, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 
 const ONETREE = "@ONETREE@";
 const AUTO_MINUTES = 10;   // a worktree's bootstrap (a dependency install) can take minutes
 export const name = "onetree";
+// where dsh keeps each session's folder and its session.lock, which gc reads to see which sessions are loaded (issue #35)
+const DSH_SESSIONS = join(resolve((process.env.DSH_HOME || "").trim() || join(homedir(), ".dsh")), "sessions");
 
 function run(args, input, cwd) {
   return spawnSync(ONETREE, args, { encoding: "utf8", timeout: 15000, cwd: cwd || process.cwd(), input });
 }
 // never spawnSync for `auto`: it would stop the server, and every session it serves, for as long as bootstrap takes.
+// gc's record of where a session works (onetree session, as a hook calls it); never waits, so never holds dsh up
+function note(fields, cwd) {
+  try {
+    const c = execFile(ONETREE, ["session"], { cwd: cwd || process.cwd(), timeout: 15000 }, () => {});
+    c.stdin.on("error", () => {});
+    c.stdin.end(JSON.stringify({ agent: "dsh", dsh_sessions: DSH_SESSIONS, ...fields }));
+  } catch (e) { /* gc then sees the session only by what it recorded before */ }
+}
 // The plain command the shell wrapper runs: `auto` binds its worktree to no session, whatever the environment holds
 function auto(cwd, signal) {
   return new Promise(resolve => {
@@ -2589,6 +2632,7 @@ let policy = null, directory = null;
 const agents = new Map();        // session id -> live agent: where a subagent's parent is found
 const opened = new WeakMap();    // session object -> the folders its sandbox is open for: worktree roots, and working directories settled
 const waiting = new WeakMap();   // session object -> the worktree made for it that it has not been moved into yet
+const recorded = new WeakMap();  // session object -> the working directory gc's record holds for it
 const pending = new WeakMap();   // session object -> its announcement, still being handled: the session shows at once, its first tool call waits
 
 // where a call runs when it names no folder: the session's working directory, which this plugin (or the agent) may
@@ -2674,7 +2718,8 @@ async function settle(agent, signal) {
   const why = open(session, at);   // already in a worktree (a resume, a fork, a subagent, a session started there): opened, nothing made or moved
   if (why && !note) note = "onetree: dsh's sandbox could not be opened for the worktree this session works in, " + at + " (" + why + "), so writes and commits there fail. onetree tries again before each tool call.";
   // asked from the folder the session was created in: for a session moved out of a main checkout, the checkout the hint is about
-  const hint = String(run(["session"], JSON.stringify({ cwd: at, session_id: header.id || "", agent: "dsh" }), header.cwd || at).stdout || "").trim();
+  const hint = String(run(["session"], JSON.stringify({ cwd: at, session_id: header.id || "", agent: "dsh", dsh_sessions: DSH_SESSIONS }), header.cwd || at).stdout || "").trim();
+  recorded.set(session, at);
   const text = waiting.has(session) ? note : [note, hint].filter(Boolean).join("\n");   // not moved yet: the hint would say to make a worktree
   if (text && agent.inject) {
     agent.inject(Object.freeze({ id: randomUUID(), role: "user", content: [{ type: "text", text }], source: { kind: "onetree" } }));   // dsh refuses the retired { kind: "plugin" } wrapper: a producer names its own kind
@@ -2691,6 +2736,7 @@ export function apply(ctx) {
     if (session && pending.has(session)) await pending.get(session);
     if (session && directory && waiting.has(session)) await enter(agent, exec.signal);
     const w = await here(agent, exec.signal);
+    if (session && w.session_id && recorded.get(session) !== w.cwd) { recorded.set(session, w.cwd); note({ session_id: w.session_id, cwd: w.cwd }, w.cwd); }
     open(session, w.cwd);   // the sandbox is the enforcement: a worktree that is not open yet fails writes there, and is tried again on the next call
     const call = shape(exec.name, exec.arguments);
     if (!call) return next();
@@ -2706,6 +2752,13 @@ export function apply(ctx) {
     const done = settle(agent).catch(() => { /* the session starts where it was created */ });
     if (session) { pending.set(session, done); done.then(() => { if (pending.get(session) === done) pending.delete(session); }); }
   });
+  // an archived session is done with its worktree, though dsh keeps it loaded (and its lock held) until the server stops
+  const archived = flag => ({ sessionId }) => {
+    const live = agents.get(sessionId), cwd = live && recorded.get(live.session);
+    if (sessionId) note({ session_id: sessionId, archived: flag, ...(cwd ? { cwd } : {}) }, cwd);
+  };
+  ctx.on("workspace/session-archived", archived(true));
+  ctx.on("workspace/session-unarchiving", archived(false));
   ctx.on("agent/disposed", ({ agent }) => {
     const id = agent && agent.session && agent.session.header && agent.session.header.id;
     if (agents.get(id) === agent) agents.delete(id);

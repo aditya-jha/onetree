@@ -140,7 +140,7 @@ Both carry the same keys; a main row adds `guard`, `integration` and `behind`.
 A worktree row from `gc --json` or a snapshot adds `gc`; a main row adds `park`.
 
 ```
-"gc":   { "action": "keep", "code": "live",           "reason": "1 live process(es) inside" }
+"gc":   { "action": "keep", "code": "live",           "reason": "1 live process(es) or dsh session(s) inside" }
 "park": { "action": "none", "code": "on-integration", "reason": "on main" }
 ```
 

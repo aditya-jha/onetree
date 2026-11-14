@@ -694,6 +694,12 @@ server; Node 22.6+ is the only extra requirement. See
   `root`; give one of them its own `root`.
 - On macOS the installed script is a copy, not a symlink, because launchd isn't
   allowed into `~/Documents` and similar folders.
+- On macOS install reloads the hourly gc job in launchd: it waits (up to about
+  5 s) until launchd has let go of the old job, then tries the bootstrap three
+  times. If the job still isn't loaded, install says so, prints the
+  `launchctl bootstrap` command that loads it, and exits non-zero, which fails
+  `onetree update` too. `ONETREE_LAUNCHD_WAIT` sets the wait between tries in
+  seconds (default 1).
 - `onetree new` checks files out with one worker per core
   (`checkout.workers=0`): on a repo with 29k tracked files (2.8 GB) that takes
   the checkout from 8.7 s to 4.3 s. Repos under 100 files check out serially.

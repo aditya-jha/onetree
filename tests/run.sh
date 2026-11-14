@@ -1651,6 +1651,31 @@ cp rel-src/bin/onetree "$TMP/brew/Cellar/onetree/1.9.0/libexec/bin/"; ut "$TMP/b
 eq "update (Homebrew install, source under the brew prefix): changes nothing, prints the brew command, exits 0" \
   "$(ut "$UH/.local/bin/onetree" update; echo "exit $?")" "onetree: installed with Homebrew; update with: brew upgrade onetree && $TMP/brew/bin/onetree install"$'\n'"exit 0"
 
+# ---- install (macOS): launchd still holds the old gc job for a while after bootout, and a bootstrap then fails (#41)
+LH=$TMP/lhome; LB=$TMP/lbin; mkdir -p "$LH" "$LB"
+printf '%s\n' '#!/bin/sh' 'echo Darwin' > "$LB/uname"
+cat > "$LB/launchctl" <<'SH'
+#!/bin/sh
+# state in $HOME: loaded (the job is in launchd), linger (prints that still find it after bootout), fails (bootstraps left to fail)
+n() { cat "$HOME/$1" 2>/dev/null || echo 0; }
+case "$1" in
+  bootout) [ -f "$HOME/loaded" ] || exit 3; rm -f "$HOME/loaded" ;;
+  print) [ -f "$HOME/loaded" ] && exit 0; [ "$(n linger)" -gt 0 ] || exit 113; echo $(($(n linger) - 1)) > "$HOME/linger" ;;
+  bootstrap) if [ "$(n linger)" -gt 0 ] || [ "$(n fails)" -gt 0 ]; then echo $(($(n fails) - 1)) > "$HOME/fails"; echo 'Bootstrap failed: 5: Input/output error' >&2; exit 5; fi; touch "$HOME/loaded" ;;
+esac
+SH
+chmod +x "$LB/uname" "$LB/launchctl"
+lt() { HOME=$LH ONETREE_CONFIG=$LH/config ONETREE_LAUNCHD_WAIT=0 PATH="$LB:$PATH" "$@"; }
+while read -r linger fails want what; do   # each run starts from a loaded job, as an update does
+  touch "$LH/loaded"; echo "$linger" > "$LH/linger"; echo "$fails" > "$LH/fails"
+  st=0; out=$(lt $ONETREE install 2>&1) || st=$?
+  eq "install (macOS): $what" "$st $([[ -f "$LH/loaded" ]] && echo loaded || echo unloaded) $(grep -c '^gc: launchd com.onetree.gc, hourly' <<<"$out") $(grep -cF 'gc: the hourly gc job com.onetree.gc is NOT loaded; load it with: launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.onetree.gc.plist' <<<"$out")" "${want//_/ }"
+done <<'ROWS'
+4 0 0_loaded_1_0 waits until launchd no longer finds the old job, then loads the new one
+0 2 0_loaded_1_0 retries a bootstrap that fails while launchd lets go, and loads the job
+0 9 1_unloaded_0_1 a bootstrap that keeps failing leaves the job unloaded: install names the command to load it and exits non-zero
+ROWS
+
 # ---- install.sh, under sh: the newest release into ONETREE_HOME, then install; a rerun updates in place; anything else there is refused
 IH=$TMP/ihome; ID=$IH/.local/share/onetree; mkdir -p "$IH"
 it() { HOME=$IH ONETREE_CONFIG=$IH/config ONETREE_BREW_PREFIX=$TMP/brew ONETREE_REPO=$TMP/rel.git PATH="$UB:$PATH" sh "$(dirname "$ONETREE")/../install.sh"; }

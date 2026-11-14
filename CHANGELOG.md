@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- `onetree install` (and so `update`) on macOS waits until launchd has let go
+  of the old gc job before loading the new one, and retries the load. On
+  2026-11-14 the load right after the unload failed with `Bootstrap failed: 5:
+  Input/output error`, and the hourly gc job stayed unloaded with nothing
+  saying so (#41). If the job still won't load, install now says it is NOT
+  loaded, prints the command that loads it, and exits non-zero.
 - `onetree update` refuses a contributor clone with uncommitted changes to
   tracked files, naming them, instead of installing them. It used to pull and
   install whatever the checkout held: on 2026-11-14 that was another session's

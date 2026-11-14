@@ -2021,7 +2021,12 @@ claude_trust_worktree() {
 cmd_auto() {
   local agent=${1:?agent}; local m; m=$(guarded_main_of_path "$PWD") || exit 1
   [[ "$agent" == --check ]] && { basename "$m"; exit 0; }
-  cmd_new "$agent-$(date +%y%m%d-%H%M%S)" "$m"
+  # two sessions started in the same second must not share a worktree (`new` hands back a folder that exists): take
+  # the next free name. shortcut: checked, not locked, so two calls in the same instant can still collide; lock if seen
+  local base; base="$agent-$(date +%y%m%d-%H%M%S)"; local slug=$base n=1
+  local dir; dir="$(root_of "$m")/$(basename "$m")"; local pre; pre=$(prefix_of "$m")
+  while [[ -e "$dir/$slug" ]] || git -C "$m" show-ref --verify --quiet "refs/heads/$pre$slug"; do n=$((n+1)); slug="$base-$n"; done
+  cmd_new "$slug" "$m"
 }
 
 # ---- registry and per-project behaviour

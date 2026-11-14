@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- `onetree update` refuses a contributor clone with uncommitted changes to
+  tracked files, naming them, instead of installing them. It used to pull and
+  install whatever the checkout held: on 2026-11-14 that was another session's
+  unfinished `bin/onetree` (#32). A guarded clone is now parked (unlocked,
+  fast-forwarded, locked again), since `git pull` cannot write its locked
+  files, so onetree's own checkout can be guarded and still deploy.
+
 - dsh: a session can make another worktree of its repository. The dsh plugin
   registers an `onetree_new` tool that runs `onetree new` outside dsh's
   sandbox, bound to the session, and opens the worktree in the session's

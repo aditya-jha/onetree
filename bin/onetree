@@ -3068,7 +3068,11 @@ cmd_update() {
   [[ -n "$bp" ]] || ! command -v brew >/dev/null || bp=$(brew --prefix)
   if [[ -n "$bp" && "$(real "$src")/" == "$(real "$bp")/"* ]]; then   # brew's own onetree, not the stale copy in ~/.local/bin, must reinstall
     echo "onetree: installed with Homebrew; update with: brew upgrade onetree && $bp/bin/onetree install"; return 0; fi
-  if git -C "$src" symbolic-ref -q HEAD >/dev/null; then git -C "$src" pull -q --ff-only   # a contributor clone: its branch
+  if git -C "$src" symbolic-ref -q HEAD >/dev/null; then   # a contributor clone: its branch
+    local dirty; dirty=$(git -C "$src" status --porcelain --untracked-files=no | cut -c4- | tr '\n' ' ')
+    [[ -z "$dirty" ]] || die "update: $src has uncommitted changes (${dirty% }), and install would copy them. Commit them, or move them to a worktree: onetree carry <slug>"
+    # a guarded source's tracked files are locked, so git pull cannot write them: park unlocks, fast-forwards, locks again
+    if guarded "$(real "$src")"; then park_one "$(real "$src")" 0; else git -C "$src" pull -q --ff-only; fi
   else   # a release install, detached at a tag: the newest vX.Y.Z by version order, never a pre-release
     git -C "$src" fetch -q --tags origin || die "update: fetching tags into $src failed"
     tag=$(git -C "$src" tag -l --sort=-v:refname 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true); tag=${tag%%$'\n'*}

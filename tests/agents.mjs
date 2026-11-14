@@ -104,6 +104,9 @@ async function dsh(opts = {}) {
   };
   return Object.assign(host, { mod, on, call, grants, moves, dirs, session, created });
 }
+// gc's record of a dsh session (issue #35), and a wait for one the plugin writes without waiting
+const record = id => { try { return JSON.parse(readFileSync(join(process.env.ONETREE_SESSIONS, "dsh", id + ".json"), "utf8")); } catch (e) { return {}; } };
+const until = async test => { for (let i = 0; i < 100 && !test(); i++) await new Promise(r => setTimeout(r, 50)); return test(); };
 const trees = () => spawnSync("git", ["-C", mirror, "worktree", "list", "--porcelain"], { encoding: "utf8" }).stdout.split("\n").filter(l => l.startsWith("worktree ")).length;
 const gitDirs = (host, id) => host.grants.filter(g => g[0] === id).map(g => g[1].replace(/^.*\/\.git\//, ".git/")).filter(d => d.startsWith(".git/")).length;
 {
@@ -144,6 +147,11 @@ const gitDirs = (host, id) => host.grants.filter(g => g[0] === id).map(g => g[1]
     plain: await host.call("bash", { command: "git stash" }, first),
     inMain: await host.call("bash", { command: "git stash", workdir: mirror }, first),
   };
+  // gc's record: where the session works and where dsh keeps its lock; archiving marks it, unarchiving clears the mark
+  const rec = record("dsh-web"), marks = [rec.archived];
+  host.on["workspace/session-archived"]({ sessionId: "dsh-web" }); await until(() => record("dsh-web").archived === true); marks.push(record("dsh-web").archived);
+  host.on["workspace/session-unarchiving"]({ sessionId: "dsh-web" }); await until(() => record("dsh-web").archived === false); marks.push(record("dsh-web").archived);
+  out.dshRecord = { cwd: rec.cwd === tree, sessions: rec.sessions === join(process.env.HOME, ".dsh", "sessions"), marks, keptCwd: record("dsh-web").cwd === tree };
   // a resume: a new session object, the working directory dsh kept
   const grantsBefore = host.grants.length;
   const again = await host.created(host.session("dsh-web"), "resume");
@@ -159,7 +167,7 @@ const gitDirs = (host, id) => host.grants.filter(g => g[0] === id).map(g => g[1]
   // the working directory changes during the session, to another worktree: opened on the next call
   const other = realpathSync(out.pi.worktree), opened = () => host.grants.some(g => g[0] === "dsh-web" && g[1] === other);
   host.dirs.set("dsh-web", other);
-  out.dshElsewhere = { before: opened(), after: (await host.call("read", {}, again), opened()) };
+  out.dshElsewhere = { before: opened(), after: (await host.call("read", {}, again), opened()), recorded: await until(() => record("dsh-web").cwd === other) };
 }
 // dsh: the announcement returns before the worktree is made (dsh shows the session only then); the first tool call waits for it
 {

@@ -458,6 +458,19 @@ the agent's commands, edits and commits happen in the worktree. A session that
 only asks a question still gets a worktree; one with no commits goes with `gc`
 after the stale window.
 
+gc cannot see a dsh session by its processes: the server runs every session
+in one process outside the worktree. The plugin records each session's working
+directory and dsh's sessions folder (`$DSH_HOME/sessions`, else
+`~/.dsh/sessions`) under the sessions folder's `dsh/`, again when the working
+directory changes, and marks a session archived or not when dsh archives or
+unarchives it. dsh holds a session's `session.lock` open while the session is
+loaded, and the kernel closes it with the process. gc keeps a worktree as
+`live` while a session works in it whose lock is open (asked with `lsof`,
+never by taking the lock) and that is not archived. A record alone keeps
+nothing; one whose lock is closed and whose folder is gone is dropped. dsh
+unloads a session only when the server stops, so an open session you are done
+with keeps its worktree until you archive it or restart `dsh web`.
+
 ### Sessions
 
 `onetree session` is the SessionStart hook for all four agents. It tells a

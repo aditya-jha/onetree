@@ -119,6 +119,13 @@ own working directory already says where it is.
 
 ## Known limits
 
+- gc sees a session only through the plugin's record of its working
+  directory and dsh's `session.lock`, which dsh holds open while the session
+  is loaded (issue #35). Nothing unloads a session while the server runs, so
+  an open session keeps its worktree until it is archived or the server
+  restarts. An archived session the browser opens again is recorded as
+  unarchived on its next announcement.
+
 - The web UI lists the session under the folder it was created in, so its
   file pane shows the main checkout. dsh fixes a session's folder at creation.
 - Grants follow the working directory. A bash call that names another

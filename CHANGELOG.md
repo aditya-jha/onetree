@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `onetree guard`, which runs before every agent tool call, reads the list of
+  guarded checkouts once instead of up to three times: about 77 ms a call instead of 108 ms
+  on macOS, where each git start goes through the xcrun shim (#28).
+
 - `onetree auto` takes the next free name (`<agent>-<time>-2`, `-3`, …) when the
   worktree folder or branch of that second is taken. Two sessions started in
   the same second were handed one worktree, because `onetree new` returns a

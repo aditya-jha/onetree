@@ -1,9 +1,33 @@
 #!/usr/bin/env bash
 # onetree tests. Hermetic: HOME and the registry live under a temp dir, origin is a local bare repo, gh has no login.
-#   bash tests/run.sh        exit 1 on any failure
+#   bash tests/run.sh                          exit 1 on any failure; its parts run in parallel
+#   ONETREE_TEST_PART=serial bash tests/run.sh  every part in one process, in file order
 # One assertion per behaviour: the facets of one operation are checked together, and a guard table names every case it got wrong.
+# Parts (#28): `# ==== part N` starts a block of part N, which runs to the next mark. Each part is its own process with its own
+# temp HOME: what precedes the first mark (helpers, fixture) and what follows `# ==== end` (the summary), then its blocks in order.
+# A block that needs another's state goes in that block's part.
 set -eo pipefail
-ONETREE=$(cd "$(dirname "$0")/.." && pwd -P)/bin/onetree
+if [[ -z "${ONETREE_TEST_PART:-}" ]]; then
+  ONETREE_TEST_ROOT=$(cd "$(dirname "$0")/.." && pwd -P); export ONETREE_TEST_ROOT
+  PARTS=$(mktemp -d); trap 'rm -rf "$PARTS"' EXIT
+  ids=$(sed -n 's/^# ==== part \([0-9][0-9]*\)$/\1/p' "$0" | sort -un); pids=""
+  for n in $ids; do
+    awk -v n="$n" '/^# ==== part /{inpart=1; keep=($4==n); next} /^# ==== end$/{inpart=0; next} !inpart || keep' "$0" > "$PARTS/$n.sh"
+    ONETREE_TEST_PART=$n "$BASH" "$PARTS/$n.sh" > "$PARTS/$n.out" 2>&1 & pids="$pids $!"
+  done
+  pass=0 fail=0 rc=0; set -- $pids
+  for n in $ids; do
+    if wait "$1"; then st=0; else st=$?; fi; shift
+    grep -v -E '^$|^[0-9]+ passed, [0-9]+ failed$' "$PARTS/$n.out" || true
+    s=$(sed -n 's/^\([0-9][0-9]*\) passed, \([0-9][0-9]*\) failed$/\1 \2/p' "$PARTS/$n.out" | tail -1)
+    if [[ -n "$s" ]]; then pass=$((pass + ${s% *})); fail=$((fail + ${s#* })); fi
+    if [[ $st != 0 && ( -z "$s" || ${s#* } == 0 ) ]]; then fail=$((fail + 1)); printf 'FAIL  part %s stopped early (exit %s)\n' "$n" "$st"; fi
+    [[ $st == 0 ]] || rc=1
+  done
+  printf '\n%d passed, %d failed\n' "$pass" "$fail"
+  exit "$rc"
+fi
+ONETREE=${ONETREE_TEST_ROOT:-$(cd "$(dirname "$0")/.." && pwd -P)}/bin/onetree
 TMP=$(cd "$(mktemp -d)" && pwd -P); trap 'chmod -R u+w "$TMP" 2>/dev/null; rm -rf "$TMP"' EXIT
 export HOME=$TMP ONETREE_CONFIG=$TMP/config ONETREE_EVENTS=$TMP/state/events.jsonl ONETREE_SESSIONS=$TMP/state/sessions ONETREE_SESSION_PID=$$ ONETREE_CACHE=$TMP/state/cache
 while IFS= read -r v; do unset "$v"; done < <(compgen -e | grep -E '^(CLAUDECODE$|CLAUDE_CODE_|CODEX_|DSH_)' || true)   # run from inside an agent, the suite must not inherit its host
@@ -11,6 +35,9 @@ export GIT_AUTHOR_NAME=onetree GIT_AUTHOR_EMAIL=onetree@test GIT_COMMITTER_NAME=
 cd "$TMP"
 
 # a gh that answers nothing (so every PR is NONE) and logs each call, to count them
+# macOS: /usr/bin/git is an xcrun shim costing ~15 ms a call, and the suite makes thousands (#28). Its own folder, not a
+# symlink to it: a git reached through a symlink finds no templates. The /usr/bin python3, make and clang shims lead there too
+if [[ "$(command -v git)" == /usr/bin/git ]] && GITDIR=$(dirname "$(xcrun -f git 2>/dev/null)") && [[ -x "$GITDIR/git" ]]; then PATH=$GITDIR:$PATH; fi
 NODE=$(command -v node || true)   # the real node: later tests put fake agent processes, a node among them, first on PATH
 mkdir -p "$TMP/bin"; export GH_LOG=$TMP/gh.log PATH=$TMP/bin:$PATH
 printf '%s\n' '#!/bin/sh' 'echo "$*" >> "$GH_LOG"' 'exit 0' > "$TMP/bin/gh"; chmod +x "$TMP/bin/gh"
@@ -48,6 +75,11 @@ guard_table() {  # desc cwd verdict command … — the guard's verdict on each 
   if [[ -z "$wrong" ]]; then ok "$desc"; else bad "$desc" "${wrong#$'\n'      }"; fi
 }
 doctor_json() { $ONETREE doctor --json 2>/dev/null || true; }   # doctor exits 1 when a check fails, which is the point of several tests
+fake_agent() {  # name — $TMP/bin/<name> N sleeps N seconds as a process called <name>. A symlink to sleep does it, except where
+  mkdir -p "$TMP/bin"; ln -sf "$(command -v sleep)" "$TMP/bin/$1"   # sleep is a multi-call binary that refuses another name (uutils,
+  "$TMP/bin/$1" 0 2>/dev/null && return 0   # Ubuntu 26): there a perl script under that name, which Linux lists by the script's name
+  rm -f "$TMP/bin/$1"; printf '%s\n' '#!/usr/bin/perl' 'sleep $ARGV[0];' > "$TMP/bin/$1"; chmod +x "$TMP/bin/$1"
+}
 
 # ---- fixture: a bare origin, a main checkout with one commit, origin/HEAD known
 git init -q --bare -b main origin.git
@@ -55,7 +87,13 @@ git clone -q origin.git main 2>/dev/null
 ( cd main && echo hi > README.md && git add README.md && git commit -qm init && git push -q origin main && git remote set-head origin -a >/dev/null )
 MAIN=$TMP/main
 $ONETREE init --no-guard --root "$TMP/worktrees" "$MAIN" >/dev/null 2>&1
+# an unregistered production checkout, marked only in its own .git/config
+git clone -q origin.git production 2>/dev/null
+PROD=$TMP/production; DEV=$TMP/development
+git -C "$PROD" config --local onetree.production true
+git -C "$PROD" config --local onetree.devClone "$DEV"
 
+# ==== part 1
 # ---- new + ls. In a single-remote clone the base and push remotes are both origin; the golden rows pin the exact output
 p=$($ONETREE new feat-a "$MAIN")
 eq "new prints the worktree path, and its branch has no upstream until the first push (golden)" "$p $(git -C "$MAIN" config --get-regexp '^branch\.feature/feat-a\.' || echo no-upstream)" "$TMP/worktrees/main/feat-a no-upstream"
@@ -78,10 +116,6 @@ has "ls (text) prints the table" "$($ONETREE ls "$MAIN")" "^$TMP/worktrees/main/
 json_is "info --json: a single-remote clone uses origin for both roles, by default" "$($ONETREE info --json "$MAIN")" '.remotes.base == {name:"origin", source:"default", slug:"'"$TMP"'/origin"} and .remotes.push.name == "origin" and .remotes.push.source == "default" and .remotes.ghUser.login == null and .writable == {paths:[], source:"default"}'
 
 # ---- an unregistered production checkout is marked only in its own .git/config
-git clone -q origin.git production 2>/dev/null
-PROD=$TMP/production; DEV=$TMP/development
-git -C "$PROD" config --local onetree.production true
-git -C "$PROD" config --local onetree.devClone "$DEV"
 json_is "production: info --json reports the local marker and development clone without registering it" "$($ONETREE info --json "$PROD")" \
   '.registered == false and .production == true and .devClone == "'"$DEV"'"'
 has_all "production: text info reports the marker and development clone" "$($ONETREE info "$PROD")" \
@@ -149,11 +183,6 @@ has "session mode: non-interactive sessions still receive a registered guarded c
 $ONETREE init --no-guard "$MAIN" >/dev/null 2>&1
 
 # ---- agents: a process whose name says agent, a recorded session, and pruning
-fake_agent() {  # name — $TMP/bin/<name> N sleeps N seconds as a process called <name>. A symlink to sleep does it, except where
-  mkdir -p "$TMP/bin"; ln -sf "$(command -v sleep)" "$TMP/bin/$1"   # sleep is a multi-call binary that refuses another name (uutils,
-  "$TMP/bin/$1" 0 2>/dev/null && return 0   # Ubuntu 26): there a perl script under that name, which Linux lists by the script's name
-  rm -f "$TMP/bin/$1"; printf '%s\n' '#!/usr/bin/perl' 'sleep $ARGV[0];' > "$TMP/bin/$1"; chmod +x "$TMP/bin/$1"
-}
 fake_agent claude
 ( cd "$p" && exec "$TMP/bin/claude" 60 ) & AG=$!
 ( cd "$p" && exec sleep 60 ) & SH=$!
@@ -389,9 +418,13 @@ eq "gc: removes the pushed CLOSED worktree and its local branch, keeps the origi
   "$(jq -c 'map(select(.slug == "closed-a"))[0].gc | [.action, .code]' <<<"$gc") $([[ -d "$ca" ]] && echo dir || echo nodir) $(git -C "$MAIN" show-ref -q --verify refs/heads/feature/closed-a && echo branch || echo nobranch) $(git -C "$TMP/origin.git" show-ref -q --verify refs/heads/feature/closed-a && echo origin-kept) $([[ -d "$cb" && -d "$cc" ]] && echo others-kept) $($ONETREE events --json --kind gc | jq '[.[] | select(.code == "pr-closed")] | length')" \
   '["remove","pr-closed"] nodir nobranch origin-kept others-kept 1'
 
+# ==== part 2
 # ---- command-position parser: classify the command word, not a regex over the line
 $ONETREE init --guard "$MAIN" >/dev/null 2>&1
 ptree=$($ONETREE new parser-onetree "$MAIN")
+mkdir -p "$TMP/gitlog"; printf '#!/bin/sh\ncase "$*" in *onetree.guarded*) echo x >> "%s" ;; esac\nexec %s "$@"\n' "$TMP/guarded.log" "$(command -v git)" > "$TMP/gitlog/git"; chmod +x "$TMP/gitlog/git"
+jq -nc --arg cwd "$MAIN" '{tool_name:"Bash",cwd:$cwd,tool_input:{command:"git stash"}}' | PATH=$TMP/gitlog:$PATH ONETREE_NO_EVENTS=1 $ONETREE guard >/dev/null 2>&1 || true
+eq "guard: one read of the guarded list per call, the cost every agent tool call pays" "$(wc -l < "$TMP/guarded.log" | tr -d ' ')" 1
 guard_table "parser: in a mirror each simple command is judged by its command word (quotes and echo are data; newlines, subshells and onetree chains do not hide a mutation)" "$MAIN" \
   block 'git stash'                       allow 'echo git stash' \
   allow "git -C $ptree status"             block 'bash -c "git stash"' \
@@ -618,6 +651,7 @@ json_is "events: a self-protection block names the guarded repo it would change;
 $ONETREE rm --force parser-onetree "$MAIN" >/dev/null 2>&1 || true
 $ONETREE init --no-guard "$MAIN" >/dev/null 2>&1
 
+# ==== part 5
 # ---- paths with spaces: repos_all / ls / new / gc must not word-split
 SP="$TMP/my repo"
 git clone -q origin.git "$SP" 2>/dev/null
@@ -631,6 +665,7 @@ cdcmd=$(ONETREE_HOST=codex-cli $ONETREE new space-feat "$SP" 2>&1 >/dev/null | g
 eq "a path with a space: the next step's cd command is quoted, so it lands in the worktree as printed" "$(eval "$cdcmd pwd -P" 2>/dev/null)" "$(cd "$spw" && pwd -P)"
 $ONETREE rm --force space-feat "$SP" >/dev/null 2>&1 || true
 
+# ==== part 2
 # ---- dsh: process name, session payload, install surface
 fake_agent dsh
 ( cd "$MAIN" && exec "$TMP/bin/dsh" 60 ) & DSHP=$!
@@ -658,6 +693,7 @@ rm -rf "$HOME/.codex"
 eq "doctor: Codex trusts onetree's hooks only while every saved hash matches; a guard approved at another path, or never approved, fails" "$t1 $t2 $t3" "[true] [false] [false]"
 has_all "rules: they name dsh, and the read-only exception names the remote from onetree info" "$($ONETREE rules)" 'Claude, Codex, pi, dsh' 'git show <remote>/<branch>:<path>'
 
+# ==== part 3
 # ---- forks: origin is my fork, upstream the canonical repo. The integration branch (nodejs) is neither remote's HEAD,
 # the fork lags the canonical repo, and PRs live on the canonical repo. URLs look like GitHub's; insteadOf maps them to local bare repos.
 git init -q --bare -b master canonical.git
@@ -780,6 +816,7 @@ has_all "fork: the snippet reads the integration branch from upstream, says wher
   'GH_TOKEN=\$\(gh auth token --user dev-org\) gh pr create --repo acme/app --base nodejs --head dev:<branch>'
 $ONETREE rm --force fork-a "$FK" >/dev/null 2>&1 || true; $ONETREE rm --force fork-b "$FK" >/dev/null 2>&1 || true; $ONETREE rm --force review-feature-fork-a "$FK" >/dev/null 2>&1 || true
 
+# ==== part 4
 # ---- writable local state in a guarded mirror. The lock covers what git tracks or would track; what git ignores is the working state
 # of the repo's tools (node_modules, husky's .husky/_, tsc's build info, .env) and stays writable; onetree.writable names local state to create
 git init -q --bare -b main w.git
@@ -891,6 +928,7 @@ eq "lockIgnored off: the lock of the ignored set is undone" "$(modes node_module
   "node_modules:w node_modules/pkg2/i.js:w .husky/_:w .env:w src/x.log:w README.md:ro "
 $ONETREE init --no-guard "$WM" >/dev/null 2>&1
 
+# ==== part 5
 # ---- sessions follow their worktree. A host fixes a session's folder at launch; after onetree new only the Claude app can follow, so onetree
 # tells each agent how to work there, and the guard names the session's own worktree. Processes stand in for agents by their argv
 mkdir -p "$HOME/.claude"   # Claude is installed: a guarded mirror keeps the Claude app's own worktree folder creatable
@@ -1177,6 +1215,7 @@ for s in deps-fresh deps-gone deps-source deps-missing deps-version deps-unknown
 ( cd "$NM" && npm ci --ignore-scripts )
 $ONETREE init --guard "$NM" >/dev/null 2>&1
 push_lock a@1.1.0 'b@2.0.0#sha512-b2' 'g@1.0.0!git+ssh://git@x/g.git#c2' c@3.0.0 d@4.0.0 'opt@1.0.0?'
+fake_agent claude   # made in part 1 too; this part has its own $TMP
 ( cd "$NM" && exec sleep 30 ) & BZ=$!
 ( cd "$NM" && exec "$TMP/bin/claude" 30 ) & IDLE=$!
 sleep 0.5
@@ -1217,6 +1256,7 @@ out=$($ONETREE park "$NM" 2>&1) || true
 eq "deps: gc does not retry a refresh that failed on this lockfile; onetree park does, and it lands" "$d $(grep -c '^deps nmain: reinstalled node_modules' <<<"$out") $(jq -r .version "$NM/node_modules/e/package.json")" "0 1 5.0.0"
 $ONETREE init --no-guard "$NM" >/dev/null 2>&1
 
+# ==== part 6
 # ---- carry: a dirty main's uncommitted work moves into a new worktree, and only then is main restored and locked
 git init -q --bare -b main c.git
 git clone -q c.git cmain 2>/dev/null
@@ -1275,6 +1315,7 @@ eq "bootstrap: with no dependency step it still succeeds and prints one line" "$
 has "bootstrap: with no package.json, uv.lock or onetree.bootstrap it says no dependency step ran on stderr" "$(cat "$TMP/bootstrap.err")" '^onetree: no dependency step ran'
 $ONETREE rm --force boot-nested "$CM" >/dev/null 2>&1 || true
 
+# ==== part 3
 # ---- review by PR number: GitHub serves pull/<n>/head on the base repo, also when the head lives in a contributor's fork
 git init -q --bare -b main pb.git
 git clone -q pb.git pmain 2>/dev/null
@@ -1328,11 +1369,13 @@ echo dirt > "$TMP/worktrees/pmain/det-c/app.txt"
 s1=0; $ONETREE rm det-b "$PM" >/dev/null 2>&1 || s1=$?; s2=0; $ONETREE rm det-c "$PM" >/dev/null 2>&1 || s2=$?
 eq "onetree rm: a detached checkout with a commit on no remote, or a change, is kept" "$s1 $s2 $([[ -d "$TMP/worktrees/pmain/det-b" && -d "$TMP/worktrees/pmain/det-c" ]] && echo kept)" "1 1 kept"
 
+# ==== part 6
 # ---- ui: argument and requirement checks (the server itself is covered by ui/server.test.ts)
 s1=0; o1=$($ONETREE ui --bogus 2>&1) || s1=$?
 s2=0; o2=$(PATH=/usr/bin:/bin $ONETREE ui --no-open 2>&1) || s2=$?
 eq "ui rejects an unknown option, and refuses without node 22+" "$s1 $(grep -c '^onetree: ui: unknown option --bogus$' <<<"$o1") $s2 $(grep -cE '^onetree: ui: node 22\+ is required' <<<"$o2")" "1 1 1 1"
 
+# ==== part 7
 # ---- generated zsh wrappers: non-interactive client commands stay in the caller's cwd, byte-for-byte at argv/stdin/stdout/stderr
 if command -v zsh >/dev/null; then
 git clone -q origin.git wrapper-main 2>/dev/null
@@ -1574,5 +1617,6 @@ keys=$(grep -oE '\b(cfg|cfg_find_clone) [a-z][A-Za-z]+' "$ONETREE" | cut -d' ' -
 undoc=$(for w in $cmds $keys; do grep -qE "\`(onetree )?$w([^a-zA-Z-]|$)" "$REF" || printf '%s ' "$w"; done)
 if [[ -z "$undoc" && -n "$cmds" && -n "$keys" ]]; then ok "reference.md documents every subcommand and config key"; else bad "reference.md documents every subcommand and config key" "missing: ${undoc:-the extraction found nothing}"; fi
 
+# ==== end
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ $fail == 0 ]]

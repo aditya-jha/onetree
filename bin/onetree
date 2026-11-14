@@ -251,12 +251,19 @@ repos_all() {  # one real path per line; paths may contain spaces
 }
 # cached list, so the per-tool-call guard costs one git read: cmd_guard reads it once into GUARDED_MEMO (it never refreshes it)
 guarded_mains() { if [[ -n "${GUARDED_MEMO+x}" ]]; then [[ -z "$GUARDED_MEMO" ]] || printf '%s\n' "$GUARDED_MEMO"; else gcfg_all onetree.guarded; fi; }
-refresh_guarded() {  # recompute the cache from every registered repo's effective config
-  local r; [[ -f "$CFG" ]] && git config -f "$CFG" --unset-all onetree.guarded 2>/dev/null || true
+# recompute the cache from every registered repo's effective config. Written only when it changes: a sandboxed agent
+# cannot write the global config, and `new` calls this every time (#24). --check: 0 when it would write, else 1
+refresh_guarded() {
+  local r want="" have
   while IFS= read -r r; do
     [[ -n "$r" ]] || continue
-    guarded "$r" && git config -f "$CFG" --add onetree.guarded "$(real "$r")"
+    if guarded "$r"; then want+="$(real "$r")"$'\n'; fi
   done < <(repos_all)
+  have=$(git config -f "$CFG" --get-all onetree.guarded 2>/dev/null || true)
+  if [[ "${want%$'\n'}" == "$have" ]]; then [[ "${1:-}" == --check ]] && return 1; return 0; fi
+  [[ "${1:-}" == --check ]] && return 0
+  [[ -f "$CFG" ]] && git config -f "$CFG" --unset-all onetree.guarded 2>/dev/null || true
+  while IFS= read -r r; do [[ -n "$r" ]] && git config -f "$CFG" --add onetree.guarded "$r"; done <<<"$want"
   return 0
 }
 
@@ -824,24 +831,29 @@ live_procs() {  # number of processes whose cwd is inside $1, and of loaded dsh 
   awk -F'\t' -v p="$1" '$3 == p || index($3, p "/") == 1 { n++ } END { print n + 0 }' <<<"$LSOF_MAP"$'\n'"$DSH_LIVE"
 }
 # A dsh server runs every session in one process outside the worktree, so lsof's cwd never shows them (issue #35). The
-# plugin records each session's working directory and dsh's sessions folder; dsh holds <that>/*/<id>/session.lock open
+# plugin records each session's working directory, the worktrees it opened in the session's sandbox (a removed one
+# would fail every write there, #22) and dsh's sessions folder; dsh holds <that>/*/<id>/session.lock open
 # while the session is loaded and the kernel closes it with the process. A session is working while that lock is open
 # and the session is not archived: a record alone keeps nothing. Asked with lsof, never flock: taking the lock even
 # for an instant fails a resume that tries it then. A record whose lock is not open and whose folder is gone is dropped
-DSH_LIVE=   # "-<tab>dsh<tab>cwd" per working dsh session, once per run; subshells inherit it
+DSH_LIVE=   # "-<tab>dsh<tab>folder" per folder a working dsh session uses, once per run; subshells inherit it
 dsh_prime() {
   [[ -n "$DSH_LIVE" ]] && return 0
   DSH_LIVE=$'\t\t'
-  local recs sid cwd root arch l held="" locks=()
-  recs=$(cat "$SESSIONS"/dsh/*.json 2>/dev/null | jq -r 'select((.session // "") != "" and (.sessions // "") != "") | [.session, (.cwd // ""), .sessions, (.archived == true)] | @tsv' 2>/dev/null) || recs=""
+  local recs sid cwd root arch used u l held="" locks=()
+  # one row per session, fields split by a record separator (read with IFS=tab would merge an empty field into the next)
+  # and its folders (working directory, then the worktrees it opened) by a unit separator
+  recs=$(cat "$SESSIONS"/dsh/*.json 2>/dev/null | jq -r 'select((.session // "") != "" and (.sessions // "") != "")
+    | [.session, (.cwd // ""), .sessions, (.archived == true), ([.cwd] + (.opened | if type == "array" then . else [] end) | map(select(type == "string" and . != "")) | join("\u001f"))] | map(tostring | gsub("[\n\u001e]"; "")) | join("\u001e")' 2>/dev/null) || recs=""
   [[ -n "$recs" ]] || return 0
-  while IFS=$'\t' read -r sid cwd root arch; do
+  while IFS=$'\036' read -r sid cwd root arch used; do
     for l in "$root"/*/"$sid"/session.lock; do [[ -e "$l" ]] && locks+=("$l"); done
   done <<<"$recs"
   [[ ${#locks[@]} -gt 0 ]] && held=$(lsof -Fn -- "${locks[@]}" 2>/dev/null | sed -n 's/^n//p' || true)
-  while IFS=$'\t' read -r sid cwd root arch; do
+  while IFS=$'\036' read -r sid cwd root arch used; do
     if grep -qF -- "/$sid/session.lock" <<<"$held"; then
-      [[ "$arch" == true || -z "$cwd" ]] || DSH_LIVE+=$'\n'"-"$'\t'"dsh"$'\t'"$cwd"
+      [[ "$arch" == true ]] && continue
+      while IFS= read -r u; do [[ -n "$u" ]] && DSH_LIVE+=$'\n'"-"$'\t'"dsh"$'\t'"$u"; done < <(tr '\037' '\n' <<<"$used")
     elif [[ -n "$cwd" && ! -d "$cwd" ]]; then rm -f "$SESSIONS/dsh/$sid.json"; fi
   done <<<"$recs"
   return 0
@@ -1038,10 +1050,20 @@ record_session() {
   # dsh: one server holds every session, so each also gets its own record, for gc (dsh_prime). One without cwd (the
   # plugin's archive mark) keeps the folder recorded before
   if [[ "$agent" == dsh && "$sid" =~ ^[A-Za-z0-9._-]+$ ]]; then
-    local f="$SESSIONS/dsh/$sid.json" old='{}'; [[ -f "$f" ]] && old=$(<"$f")
-    { mkdir -p "$SESSIONS/dsh" && jq -cn --argjson old "$old" --argjson new "$j" --argjson pid "$pid" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-        '$old + ($new | {session: .session_id, cwd, sessions: .dsh_sessions} | with_entries(select(.value != null and .value != "")))
-         + {archived: ($new.archived == true), agent: "dsh", pid: $pid, recordedAt: $at}' > "$f.$$" && mv "$f.$$" "$f"; } 2>/dev/null || rm -f "$f.$$"
+    # each write merges into the last, and the plugin starts several at once (a new worktree opened, the working
+    # directory moved): one at a time, or one drops the other's fields. A lock left by a killed writer is taken after 5 s
+    local f="$SESSIONS/dsh/$sid.json" old='{}' i=0
+    mkdir -p "$SESSIONS/dsh" 2>/dev/null || return 0
+    until mkdir "$f.lock" 2>/dev/null; do
+      i=$((i+1)); if [[ $i -ge 50 ]]; then rm -rf "$f.lock"; mkdir "$f.lock" 2>/dev/null || return 0; break; fi
+      sleep 0.1
+    done
+    [[ -f "$f" ]] && old=$(<"$f")
+    { jq -cn --argjson old "$old" --argjson new "$j" --argjson pid "$pid" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        '$old + ($new | {session: .session_id, cwd, sessions: .dsh_sessions, opened} | with_entries(select(.value != null and .value != "")))
+         + (if $new | has("archived") then {archived: ($new.archived == true)} else {} end)
+         + {agent: "dsh", pid: $pid, recordedAt: $at}' > "$f.$$" && mv "$f.$$" "$f"; } 2>/dev/null || rm -f "$f.$$"
+    rmdir "$f.lock" 2>/dev/null || true
   fi
   return 0
 }
@@ -1400,13 +1422,42 @@ bootstrap() {  # main path — copy the gitignored bits a fresh checkout lacks, 
   return 0
 }
 
+# dir — 0 when a file can be made in dir, or in the nearest folder above it that exists. Tried, not read from the mode
+# bits: a sandbox refuses writes the bits allow
+can_write() {
+  local d=$1 f; while [[ ! -e "$d" && "$d" != / ]]; do d=$(dirname "$d"); done
+  f=$(mktemp "$d/.onetree-probe.XXXXXX" 2>/dev/null) || return 1
+  rm -f "$f"; return 0
+}
+# main slug — the first place `new` must write and cannot, or 1: the main's git dir, the global config when it would
+# change, and, for a worktree not made yet, the folder it goes in
+new_unwritable() {
+  local m=$1 p; p="$(root_of "$m")/$(basename "$m")/$2"
+  can_write "$m/.git" || { printf '%s\n' "$m/.git"; return 0; }
+  if ! is_registered "$m" || refresh_guarded --check; then can_write "$(dirname "$CFG")" || { printf '%s\n' "$CFG"; return 0; }; fi
+  [[ -d "$p" ]] || can_write "$(dirname "$p")" || { printf '%s\n' "$(dirname "$p")"; return 0; }
+  return 1
+}
+# host slug repo — how that agent gets a new worktree: dsh's sandbox cannot run `onetree new` (it writes outside it),
+# so onetree's dsh plugin offers a tool that runs it outside, for the session's own repo (#24)
+new_step() {
+  case "$1" in
+    dsh|dsh-moved) printf "call the \`onetree_new\` tool with slug %s: onetree's dsh plugin makes the worktree outside dsh's sandbox and opens it for this session (no such tool: ask the user to restart \`dsh web\`, which loads the plugin)" "$2" ;;
+    *) printf "run \`onetree new %s%s\`" "$2" "${3:+ $3}" ;;
+  esac
+}
 cmd_new() {
   # before anything with side effects: `new --help` once made a worktree
   local slug=${1:?slug}; [[ "$slug" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "slug: letters, digits, . _ - only, starting with a letter or digit"
   local main; main=$(main_of "${2:-}"); local repo; repo=$(basename "$main")
-  # a sandboxed agent (Codex under workspace-write) may write only the folders it was started with, and its sandbox
-  # cannot grow: say so, before git dies on a lock file (#15)
-  [[ -w "$main/.git" ]] || die "cannot write $main/.git, so no worktree can be made from here. A sandboxed agent session writes only the worktree it started in; ask the user to start a session for this task: cd $(shq "$main") && onetree launch --task $slug <agent>"
+  # a sandboxed agent (Codex under workspace-write, dsh) may write only the folders it was started with: say so, before
+  # git dies on a lock file (#15) or after git has made half a worktree (#24)
+  local nw; if nw=$(new_unwritable "$main" "$slug"); then
+    case "$(host_of)" in
+      dsh) die "cannot write $nw, so no worktree can be made from inside dsh's sandbox. $(new_step dsh "$slug") instead." ;;
+      *) die "cannot write $nw, so no worktree can be made from here. A sandboxed agent session writes only the worktree it started in; ask the user to start a session for this task: cd $(shq "$main") && onetree launch --task $slug <agent>" ;;
+    esac
+  fi
   ensure_registered "$main"; refresh_guarded
   local int; int=$(integration "$main"); local branch; branch="$(prefix_of "$main")$slug"; local root; root=$(root_of "$main"); local path="$root/$repo/$slug"
   # carry: a new branch at that commit, never a resumed one, so the carried changes apply as they were made
@@ -2273,8 +2324,11 @@ $( [[ $g == 1 ]] && printf 'The main checkout `%s` is a read-only mirror: a hook
   conversation turns into a change, create the worktree first, even mid-conversation.$( if [[ $g == 1 ]] && lock_ignored "$main"; then [[ -n "$wr" ]] && printf '\n  Local state stays writable in the mirror: `%s` (gitignored; a file entry takes in-place writes only).' "$wr"; elif [[ $g == 1 ]]; then printf '\n  Gitignored local state (dependencies, caches, `.env`) stays writable in the mirror; an ignored file in a locked directory takes in-place writes only.'; fi )
 - **Starting a state-changing task$( [[ $g == 1 ]] && printf ' while your working directory is the mirror' ):** run \`onetree new <slug> $repo\` and work in the printed
   path; \`onetree new\` also prints how this agent moves there. Claude desktop app: call \`change_directory\` with
-  the path (main conversation only; the app's panes then follow). Everywhere else (Claude CLI or IDE, Codex, pi,
-  dsh): prefix every command with \`cd <path> &&\` and edit by absolute path. State the path in your first reply.
+  the path (main conversation only; the app's panes then follow). dsh: its sandbox cannot run \`onetree new\`; call
+  the \`onetree_new\` tool instead, then pass the path as \`workdir\` to every bash call and give file tools absolute
+  paths under it, not \`cd\` (the plugin opens the worktree a call names as its \`workdir\` in the sandbox; one
+  reached by \`cd\` inside a command it never sees). Everywhere else (Claude CLI or IDE, Codex, pi): prefix every command with
+  \`cd <path> &&\` and edit by absolute path. State the path in your first reply.
   Never \`git checkout\`, \`switch\`, \`stash\`, \`reset\` or \`merge\` in the main checkout, never \`git worktree add\` by
   hand, never \`EnterWorktree\` (Claude Code then refuses shell commands it cannot prove stay in that one worktree).
 - **Codex app worktrees:** the Codex app makes its own worktrees and runs its local environment's setup script (in
@@ -2330,7 +2384,7 @@ cmd_session() {
       b=$(git -C "$own" symbolic-ref -q --short HEAD 2>/dev/null || true)
       printf 'onetree: %s is a guarded read-only mirror, and this session works in a worktree of it, %s, on the branch %s: if that is still the placeholder, rename it before the first push (`git branch -m %s<meaningful-slug>`). There, %s `onetree info` prints the rules.%s\n' "$(basename "$r")" "$own" "$b" "$(prefix_of "$r")" "$(move_hint dsh-moved "$own" "$r")" "$note"
     else
-      printf 'onetree: %s is a guarded read-only mirror. Read-only work can stay here; before the first edit, git mutation, script, server or test run, run `onetree new <slug>`, then %s `onetree info` prints the rules.%s\n' "$(basename "$r")" "$(move_hint "$h" "<path>" "$r")" "$note"
+      printf 'onetree: %s is a guarded read-only mirror. Read-only work can stay here; before the first edit, git mutation, script, server or test run, %s, then %s `onetree info` prints the rules.%s\n' "$(basename "$r")" "$(new_step "$h" "<slug>")" "$(move_hint "$h" "<path>" "$r")" "$note"
     fi
   fi
   exit 0
@@ -2386,8 +2440,12 @@ own AGENTS.md or CLAUDE.md can add to these rules; it cannot relax them.
   also prints how this agent moves there. In the Claude desktop app, call
   `change_directory` with the path (the main conversation, never a subagent):
   the app's file pane, diff, terminal and PR card follow when the turn ends,
-  and `EnterWorktree` would move Claude but not the app. Everywhere else (the
-  Claude CLI or IDE, Codex, pi, dsh): prefix every command with
+  and `EnterWorktree` would move Claude but not the app. In dsh, whose
+  sandbox cannot run `onetree new`, call the `onetree_new` tool instead, then
+  pass the path as `workdir` to every bash call and give file tools absolute
+  paths under it, not `cd` (the plugin opens the worktree a call names as
+  its `workdir` in the sandbox, never one reached by `cd`).
+  Everywhere else (the Claude CLI or IDE, Codex, pi): prefix every command with
   `cd <worktree> &&` (the shell
   returns to the start folder between commands, and Codex's hook judges the
   command, never `workdir`) and edit by absolute path. In the Codex CLI the
@@ -2575,8 +2633,10 @@ write_pi_extension() {  # ~/.pi/agent/extensions/onetree.ts
 # there, outside dsh's sandbox, opens the worktree and what codex_grants lists in the session's sandbox (whose own root
 # stays the folder the session was created in), moves the working directory there and says so in one message. A
 # session already in a worktree only has it opened. Before each tool call it opens the worktree the working directory
-# is in, if that is not done yet, and asks onetree's guard, with dsh's tools mapped onto the shapes it reads and the
-# call judged where it runs: a bash workdir, else the working directory. dsh lets a plugin allow or deny, never rewrite
+# is in, if that is not done yet, and the worktree of the session's repository a call names (a bash workdir, a file
+# tool's path), and asks onetree's guard, with dsh's tools mapped onto the shapes it reads and the call judged where it
+# runs: a bash workdir, else the working directory. dsh lets a plugin allow or deny, never rewrite. Another worktree comes
+# from the plugin's onetree_new tool, which runs `onetree new` outside the sandbox (#24)
 render_dsh_plugin() {
   local t   # read, not $(cat <<…): bash 3.2 pairs the quotes of a here-document inside $(), and this text has apostrophes
   IFS= read -r -d '' t <<'DSHPLUGIN' || true
@@ -2584,9 +2644,9 @@ render_dsh_plugin() {
 // guard before each tool call, the session hint
 import { execFile, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 const ONETREE = "@ONETREE@";
 const AUTO_MINUTES = 10;   // a worktree's bootstrap (a dependency install) can take minutes
@@ -2597,7 +2657,6 @@ const DSH_SESSIONS = join(resolve((process.env.DSH_HOME || "").trim() || join(ho
 function run(args, input, cwd) {
   return spawnSync(ONETREE, args, { encoding: "utf8", timeout: 15000, cwd: cwd || process.cwd(), input });
 }
-// never spawnSync for `auto`: it would stop the server, and every session it serves, for as long as bootstrap takes.
 // gc's record of where a session works (onetree session, as a hook calls it); never waits, so never holds dsh up
 function note(fields, cwd) {
   try {
@@ -2606,6 +2665,7 @@ function note(fields, cwd) {
     c.stdin.end(JSON.stringify({ agent: "dsh", dsh_sessions: DSH_SESSIONS, ...fields }));
   } catch (e) { /* gc then sees the session only by what it recorded before */ }
 }
+// never spawnSync for `auto`: it would stop the server, and every session it serves, for as long as bootstrap takes.
 // The plain command the shell wrapper runs: `auto` binds its worktree to no session, whatever the environment holds
 function auto(cwd, signal) {
   return new Promise(resolve => {
@@ -2617,6 +2677,16 @@ function auto(cwd, signal) {
 // what a session's announcement still has to do (the tests wait on it); undefined once done
 export function settled(agent) { return pending.get(agent && agent.session); }
 
+// `onetree new <slug>` for the onetree_new tool, run where the session works, outside dsh's sandbox, and recorded as
+// that session's (ONETREE_SESSION_ID). A cancelled call does not stop it (that would leave half a worktree); only the
+// time limit `auto` has does
+function newTree(slug, cwd, session_id) {
+  return new Promise(resolve => {
+    execFile(ONETREE, ["new", slug], { encoding: "utf8", timeout: AUTO_MINUTES * 60000, cwd, env: { ...process.env, ONETREE_HOST: "dsh", ONETREE_SESSION_ID: session_id } },
+      (error, stdout, stderr) => resolve({ error, tree: error ? "" : String(stdout || "").trim().split("\n").pop(), stderr: String(stderr || "").trim() }));
+  });
+}
+
 export function shape(tool, a) {
   a = a || {};
   if (tool === "bash") return { tool_name: "Bash", tool_input: { command: a.command, workdir: a.workdir } };
@@ -2626,6 +2696,15 @@ export function shape(tool, a) {
   return null;
 }
 
+// the folder a call names, resolved against where it runs: a bash workdir, or the folder of a file tool's path
+export function named(tool, a, cwd) {
+  a = a || {};
+  const p = tool === "bash" ? a.workdir : tool === "write" || tool === "edit" ? a.file_path : tool === "str_replace_editor" ? a.path : undefined;
+  if (typeof p !== "string" || !p) return "";
+  const full = resolve(cwd, p);
+  return tool === "bash" ? full : dirname(full);
+}
+
 // neither service is in every profile: without the working directory a session cannot be moved, without the policy
 // there is no sandbox to open
 let policy = null, directory = null;
@@ -2633,6 +2712,7 @@ const agents = new Map();        // session id -> live agent: where a subagent's
 const opened = new WeakMap();    // session object -> the folders its sandbox is open for: worktree roots, and working directories settled
 const waiting = new WeakMap();   // session object -> the worktree made for it that it has not been moved into yet
 const recorded = new WeakMap();  // session object -> the working directory gc's record holds for it
+const roots = new WeakMap();     // session object -> the worktree roots opened in its sandbox, which gc's record lists
 const pending = new WeakMap();   // session object -> its announcement, still being handled: the session shows at once, its first tool call waits
 
 // where a call runs when it names no folder: the session's working directory, which this plugin (or the agent) may
@@ -2664,15 +2744,45 @@ function open(session, dir, mustList) {
   const top = spawnSync("git", ["-C", dir, "rev-parse", "--show-toplevel"], { encoding: "utf8", timeout: 15000 });
   if (top.status !== 0) return "git could not name the worktree " + dir + " is in";
   const made = [];
+  let root;
   try {
-    const root = realpathSync.native(String(top.stdout).trim());
+    root = realpathSync.native(String(top.stdout).trim());
     if (!done.has(root)) for (const d of [root, ...dirs]) made.push(policy.registerWritableRoot(session, realpathSync.native(d)));
     done.add(root); done.add(dir);
   } catch (e) {
     for (const undo of made) { if (typeof undo === "function") undo(); }   // the next try starts clean
     return String((e && e.message) || e);
   }
+  if (made.length) {   // gc keeps every worktree a loaded session has open: removing one would fail all its writes (#22)
+    let set = roots.get(session);
+    if (!set) roots.set(session, set = new Set());
+    set.add(root);
+    const id = session.header && session.header.id;
+    if (id) note({ session_id: id, opened: [...set] }, root);
+  }
   return "";
+}
+// git's common dir for dir, by real path: which repository it belongs to; "" outside one
+function repoOf(dir) {
+  const r = spawnSync("git", ["-C", dir, "rev-parse", "--path-format=absolute", "--git-common-dir"], { encoding: "utf8", timeout: 15000 });
+  if (r.status !== 0) return "";
+  try { return realpathSync.native(String(r.stdout).trim()); } catch (e) { return ""; }
+}
+// A worktree a call names (a bash workdir, a file tool's path) is opened when it belongs to the repository the session
+// was created in: a session may work in several of its worktrees (#24). A folder of another repository is never
+// opened by onetree; dsh asks the user about it as about any folder outside the sandbox
+const homeRepo = new WeakMap();   // session object -> repoOf(the folder it was created in)
+function openNamed(session, dir) {
+  if (!policy || !session || !dir) return;
+  let d = dir;
+  while (!existsSync(d) && dirname(d) !== d) d = dirname(d);
+  let done = opened.get(session);
+  if (!done) opened.set(session, done = new Set());
+  if (done.has(d)) return;
+  if (!homeRepo.has(session)) homeRepo.set(session, repoOf((session.header && session.header.cwd) || ""));
+  const home = homeRepo.get(session), repo = repoOf(d);
+  if (home && repo === home) open(session, d, false);
+  else done.add(d);   // not this repository's: asked once
 }
 // grants first, then the move: a session is moved only into a worktree its sandbox lets it write and commit in.
 // -> "" when moved, else why not; tried again before each tool call
@@ -2726,10 +2836,45 @@ async function settle(agent, signal) {
   }
 }
 
+// dsh's sandbox cannot run `onetree new` (it writes the worktree root, onetree's config and log outside it), so a session
+// that wants another worktree of its repository asks for one here (#24). The session does not move: it may work in
+// several, each named as a workdir
+const NEW_TOOL = {
+  name: "onetree_new",
+  description: "Make a git worktree for one task in the repository this session works in. onetree guards that repository's main checkout, and dsh's sandbox cannot run `onetree new`, so this tool runs it outside the sandbox: it fetches, cuts a branch from the integration branch, installs dependencies (this can take a few minutes), records the worktree as this session's and opens it in this session's sandbox. Calling it again with the same slug returns the same worktree. This session's working directory does not change: pass the returned path as `workdir` to every bash call there and give file tools absolute paths under it, not `cd` (the sandbox is opened for a call's `workdir`, never for a folder reached by `cd`).",
+  parameters: {
+    type: "object",
+    properties: { slug: { type: "string", description: "Short name for the task: letters, digits, . _ - only, starting with a letter or digit. The worktree folder and its branch (the repository's prefix plus the slug) are named after it." } },
+    required: ["slug"],
+  },
+  output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: String(value) }] },
+  timeoutMs: AUTO_MINUTES * 60000 + 30000,
+  async execute(args, exec) {
+    const slug = args && typeof args.slug === "string" ? args.slug.trim() : "";
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(slug)) throw new Error("slug: letters, digits, . _ - only, starting with a letter or digit");
+    const agent = exec && exec.agent, session = agent && agent.session;
+    if (!session) throw new Error("onetree_new: no session called it");
+    if (pending.has(session)) await pending.get(session);   // its first worktree first
+    const w = await here(agent, exec.signal);
+    const r = await newTree(slug, w.cwd, w.session_id);
+    if (!r.tree) {
+      const why = r.error && r.error.killed ? "`onetree new` did not finish in " + AUTO_MINUTES + " minutes" : r.stderr.split("\n").filter(Boolean).pop() || String((r.error && r.error.message) || "no worktree was printed");
+      throw new Error("onetree could not make the worktree: " + why);
+    }
+    const tree = realpathSync.native(r.tree);
+    const branch = String(spawnSync("git", ["-C", tree, "symbolic-ref", "-q", "--short", "HEAD"], { encoding: "utf8", timeout: 15000 }).stdout || "").trim();
+    const why = open(session, tree, true);
+    if (why) throw new Error("onetree made the worktree " + tree + (branch ? " on the branch " + branch : "") + ", but dsh's sandbox could not be opened for it (" + why + "), so writes there fail. onetree tries again before each tool call that names it.");
+    const next = r.stderr.split("\n").filter(l => l.startsWith("onetree: next,")).pop();
+    return ["The worktree " + tree + (branch ? " on the branch " + branch : "") + " is ready and open in this session's sandbox.", next || "Pass `workdir` " + tree + " to every bash call there and give file tools absolute paths under it."].join("\n");
+  },
+};
+
 export function apply(ctx) {
   if (ctx.inject) {
     ctx.inject(["sandboxPolicy"], scope => { policy = scope.sandboxPolicy; });
     ctx.inject(["workingDirectory"], scope => { directory = scope.workingDirectory; });
+    ctx.inject(["tools"], scope => { scope.tools.register(NEW_TOOL); });
   }
   ctx.on("tools/pre-execute", async (exec, next) => {
     const agent = exec.agent, session = agent && agent.session;
@@ -2738,6 +2883,7 @@ export function apply(ctx) {
     const w = await here(agent, exec.signal);
     if (session && w.session_id && recorded.get(session) !== w.cwd) { recorded.set(session, w.cwd); note({ session_id: w.session_id, cwd: w.cwd }, w.cwd); }
     open(session, w.cwd);   // the sandbox is the enforcement: a worktree that is not open yet fails writes there, and is tried again on the next call
+    openNamed(session, named(exec.name, exec.arguments, w.cwd));
     const call = shape(exec.name, exec.arguments);
     if (!call) return next();
     const r = run(["guard"], JSON.stringify({ ...call, ...w, agent: "dsh" }), w.cwd);
@@ -3786,7 +3932,7 @@ block() {
   own=; [[ "$h" != dsh ]] || own=$(worktree_at "${scwd:-}" "$2") || own=
   if [[ -n "$own" ]]; then h=dsh-moved; else own=$(bound_worktrees "${sid:-}" "$([[ "$apid" == null ]] || echo "$apid")" "$2" | awk 'NR == 1') || own=; fi
   if [[ -n "$own" ]]; then where="This session already has a worktree, $own: do it there. To work there, $(move_hint "$h" "$own" "$2")"
-  else where="Work in a worktree instead: run \`onetree new <slug> $r\`, then $(move_hint "$h" "<path>" "$2")"; fi
+  else where="Work in a worktree instead: $(new_step "$h" "<slug>" "$r"), then $(move_hint "$h" "<path>" "$2")"; fi
   printf 'onetree guard (%s): %s is the read-only main checkout of %s. %s Never switch, stash, reset, edit, or run scripts, servers or tests in the main checkout; reading is fine.%s\n' "${3:-a write}" "$1" "$r" "$where" "$note" >&2
   exit 2
 }

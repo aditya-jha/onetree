@@ -458,16 +458,34 @@ the agent's commands, edits and commits happen in the worktree. A session that
 only asks a question still gets a worktree; one with no commits goes with `gc`
 after the stale window.
 
+A dsh session that wants another worktree of its repository calls the
+`onetree_new` tool the plugin registers, with a slug: dsh's sandbox cannot run
+`onetree new` itself (it writes the worktree root, onetree's config and log),
+so the plugin runs it outside the sandbox, bound to the session, opens the new
+worktree and its git folders in the session's sandbox, and returns the path.
+The same slug returns the same worktree. The session's working directory does
+not change: it passes the path as `workdir` to bash and gives file tools
+absolute paths under it, and may work in several worktrees that way, not
+through `cd`: before each call the plugin opens the worktree a call names (a bash `workdir`, a file
+tool's path) if it belongs to the repository the session was created in; one
+of another repository is never opened by onetree. A refusal, the session
+hint and `onetree new` run inside the sandbox point a dsh session at the tool
+(or at restarting `dsh web` when it has no such tool yet).
+
 gc cannot see a dsh session by its processes: the server runs every session
 in one process outside the worktree. The plugin records each session's working
-directory and dsh's sessions folder (`$DSH_HOME/sessions`, else
+directory, every worktree it opened in the session's sandbox, and dsh's sessions folder (`$DSH_HOME/sessions`, else
 `~/.dsh/sessions`) under the sessions folder's `dsh/`, again when the working
 directory changes, and marks a session archived or not when dsh archives or
 unarchives it. dsh holds a session's `session.lock` open while the session is
 loaded, and the kernel closes it with the process. gc keeps a worktree as
 `live` while a session works in it whose lock is open (asked with `lsof`,
 never by taking the lock) and that is not archived. A record alone keeps
-nothing; one whose lock is closed and whose folder is gone is dropped. dsh
+nothing; one whose lock is closed and whose folder is gone is dropped. Each
+worktree the session opened is kept the same way: dsh fails every write of a
+session one of whose granted folders is gone (#22). Writes to a record are
+taken one at a time under a lock, and `archived` changes only when dsh
+archives or unarchives the session. dsh
 unloads a session only when the server stops, so an open session you are done
 with keeps its worktree until you archive it or restart `dsh web`.
 
@@ -526,7 +544,7 @@ Claude shell is Codex), the host by its environment:
 | Codex CLI | `cd <path> &&` before every command (the hook sees the command, never `workdir`) and absolute `apply_patch` paths; the user can move the thread with `/cd <path>` |
 | Codex app | the same; the thread's review pane stays where it started, so a new thread on the path reviews the work |
 | pi | nothing: the extension runs the session's commands in the worktree from then on |
-| dsh | nothing when the session's working directory is in the worktree (the plugin moves a session announced in a guarded main checkout); otherwise `workdir` on every bash call and absolute paths for file tools. The web UI keeps the session under the mirror either way |
+| dsh | nothing when the session's working directory is in the worktree (the plugin moves a session announced in a guarded main checkout); otherwise `workdir` on every bash call and absolute paths for file tools, not `cd` (the plugin opens a call's `workdir` in the sandbox). A dsh session makes another worktree with the plugin's `onetree_new` tool, not `onetree new`. The web UI keeps the session under the mirror either way |
 
 `new` records which session made the worktree (`agent`, `host`, `session`,
 `pid`), so a guard refusal in the mirror names that session's newest worktree.
@@ -559,10 +577,18 @@ working directory is in and the same folders (`onetree codex-grants`), by real
 path (dsh refuses a symlinked grant), once per live session and worktree and
 again after a resume, through dsh's `sandboxPolicy.registerWritableRoot`: every
 dsh profile gets them with no launch flag. A session whose working directory
-is a main checkout is granted nothing. The agent itself still cannot make a
-worktree from inside the sandbox (`onetree new` says so): the plugin makes
-one for a session announced in a guarded main checkout, and any other needs a
-terminal.
+is a main checkout is granted nothing. The agent itself cannot make a
+worktree from inside the sandbox: the plugin makes one for a session
+announced in a guarded main checkout, and any other through its
+`onetree_new` tool.
+
+`onetree new` tries each place it is about to write before git does anything:
+the main checkout's git directory, the folder the worktree goes in, and the
+global config when it must change (it writes the guarded-repo list only when
+that list changes). It tries by making a file there, since a sandbox refuses
+writes the mode bits allow, and names the first place it cannot write: an
+agent in Codex's sandbox is told to have a session started for the task, a
+dsh session to call `onetree_new`.
 
 Under either sandbox git prints `error: Unable to create
 '<main>/.git/packed-refs.lock': Operation not permitted` on each commit. The

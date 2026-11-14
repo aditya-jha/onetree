@@ -123,14 +123,20 @@ own working directory already says where it is.
   directory and dsh's `session.lock`, which dsh holds open while the session
   is loaded (issue #35). Nothing unloads a session while the server runs, so
   an open session keeps its worktree until it is archived or the server
-  restarts. An archived session the browser opens again is recorded as
-  unarchived on its next announcement.
+  restarts. The record also lists every worktree the session opened (#24),
+  and gc keeps those the same way, since dsh fails every write of a session
+  one of whose granted folders is gone (#22).
 
 - The web UI lists the session under the folder it was created in, so its
   file pane shows the main checkout. dsh fixes a session's folder at creation.
-- Grants follow the working directory. A bash call that names another
-  worktree as its `workdir` is judged there by the guard, but that worktree is
-  not opened in the sandbox.
+- A session gets another worktree through the plugin's `onetree_new` tool
+  (#24), and works there through `workdir`, as dsh's bash tool asks (each call
+  runs in a fresh shell). The plugin opens the worktree a call names as its
+  `workdir` (or a file tool's path), and only when it belongs to the
+  repository the session was created in; a folder reached by `cd` inside a
+  command is never opened. dsh's `sdk-minimal` bundle uses a persistent bash
+  with no `workdir`, where a `cd` lasts between calls while the guard judges
+  each call at the session's working directory; onetree does not cover it.
 - A subagent's parent is looked up among the sessions announced in this
   server process. dsh places a new subagent itself, so this matters only
   where it did not.

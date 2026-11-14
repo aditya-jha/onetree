@@ -1087,6 +1087,8 @@ shq() {
   if [[ "$s" == "<path>" || "$s" =~ ^[A-Za-z0-9_./~@%+=:,-]+$ ]]; then printf '%s' "$s"; return 0; fi
   s=${s//\'/\'\\\'\'}; printf "'%s'" "$s"
 }
+# dir main — the worktree of main that dir is in, if it is in one: read from git, no record of who made it
+worktree_at() { local t; [[ -n "$1" ]] && t=$(git -C "$1" rev-parse --show-toplevel 2>/dev/null) && t=$(real "$t") && listed_worktree "$2" "$t" && printf '%s\n' "$t"; }
 # host path main — one paragraph: how the agent in that host works in path from here on. Tool arguments and Codex's /cd
 move_hint() {
   local p=$2 m=$3 q   # take the path as it is; in a shell command it is quoted
@@ -1099,7 +1101,10 @@ move_hint() {
     codex-cli) printf "prefix every command with \`cd %s &&\` (onetree's hook judges the command, never \`workdir\`) and give apply_patch absolute paths under it. To move this thread itself, ask the user to type \`/cd %s\`." "$q" "$p" ;;
     codex-app) printf "prefix every command with \`cd %s &&\` (onetree's hook judges the command, never \`workdir\`) and give apply_patch absolute paths under it. This thread's review pane stays on %s; to review the work in the app, ask the user to open a new thread on %s." "$q" "$m" "$p" ;;
     pi) printf "nothing to do: onetree's pi extension runs this session's commands in %s from now on, and relative paths in read, write and edit resolve there." "$p" ;;
-    dsh) printf "pass \`workdir\` %s to every bash call and give file tools absolute paths under it: this session cannot change its folder, and the web UI keeps it under %s." "$p" "$m" ;;
+    # dsh-moved: the working directory the dsh plugin sent is inside the worktree (the plugin moved it there, or the
+    # session was started there); dsh: it is not. The session's folder in the web UI never changes
+    dsh-moved) printf "leave \`workdir\` out of bash calls and give file tools paths under it: this session works in %s, though the web UI may still list it under %s." "$p" "$m" ;;
+    dsh) printf "pass \`workdir\` %s to every bash call and give file tools absolute paths under it: this session's working directory is not there, and the web UI keeps it under %s." "$p" "$m" ;;
     *) printf "prefix every command with \`cd %s &&\` and edit by absolute path (in the Claude desktop app, \`change_directory\` with that path)." "$q" ;;
   esac
 }
@@ -2016,7 +2021,12 @@ claude_trust_worktree() {
 cmd_auto() {
   local agent=${1:?agent}; local m; m=$(guarded_main_of_path "$PWD") || exit 1
   [[ "$agent" == --check ]] && { basename "$m"; exit 0; }
-  cmd_new "$agent-$(date +%y%m%d-%H%M%S)" "$m"
+  # two sessions started in the same second must not share a worktree (`new` hands back a folder that exists): take
+  # the next free name. shortcut: checked, not locked, so two calls in the same instant can still collide; lock if seen
+  local base; base="$agent-$(date +%y%m%d-%H%M%S)"; local slug=$base n=1
+  local dir; dir="$(root_of "$m")/$(basename "$m")"; local pre; pre=$(prefix_of "$m")
+  while [[ -e "$dir/$slug" ]] || git -C "$m" show-ref --verify --quiet "refs/heads/$pre$slug"; do n=$((n+1)); slug="$base-$n"; done
+  cmd_new "$slug" "$m"
 }
 
 # ---- registry and per-project behaviour
@@ -2278,7 +2288,17 @@ cmd_session() {
     local wr note; wr=$(wr_entries "$r" 2>/dev/null | tr '\n' ' ' || true); wr=${wr% }
     if lock_ignored "$r"; then note=$([[ -n "$wr" ]] && printf ' Local state that belongs to this checkout stays writable here, without a worktree: %s (a file entry takes in-place writes only).' "$wr")
     else note=' Gitignored local state (dependencies, caches, .env, agent settings) stays writable here, without a worktree; an ignored file in a locked directory takes in-place writes only.'; fi
-    printf 'onetree: %s is a guarded read-only mirror. Read-only work can stay here; before the first edit, git mutation, script, server or test run, run `onetree new <slug>`, then %s `onetree info` prints the rules.%s\n' "$(basename "$r")" "$(move_hint "$(host_of)" "<path>" "$r")" "$note"
+    # the pi extension and the dsh plugin say who is asking (the guard reads the same field): `pnpm dsh web` is a node
+    # process with no dsh in its name. dsh's plugin asks from the folder the session was created in and sends the
+    # session's working directory as cwd: inside a worktree of this checkout, that is where the session works
+    local h own="" b; h=$(host_of)
+    case "$(jq -r '.agent // empty' <<<"$j" 2>/dev/null)" in pi) h=pi ;; dsh) h=dsh; own=$(worktree_at "$(jq -r '.cwd // empty' <<<"$j" 2>/dev/null)" "$r") || own= ;; esac
+    if [[ -n "$own" ]]; then
+      b=$(git -C "$own" symbolic-ref -q --short HEAD 2>/dev/null || true)
+      printf 'onetree: %s is a guarded read-only mirror, and this session works in a worktree of it, %s, on the branch %s: if that is still the placeholder, rename it before the first push (`git branch -m %s<meaningful-slug>`). There, %s `onetree info` prints the rules.%s\n' "$(basename "$r")" "$own" "$b" "$(prefix_of "$r")" "$(move_hint dsh-moved "$own" "$r")" "$note"
+    else
+      printf 'onetree: %s is a guarded read-only mirror. Read-only work can stay here; before the first edit, git mutation, script, server or test run, run `onetree new <slug>`, then %s `onetree info` prints the rules.%s\n' "$(basename "$r")" "$(move_hint "$h" "<path>" "$r")" "$note"
+    fi
   fi
   exit 0
 }
@@ -2516,22 +2536,37 @@ write_pi_extension() {  # ~/.pi/agent/extensions/onetree.ts
   mkdir -p "$HOME/.pi/agent/extensions"
   render_pi_extension > "$HOME/.pi/agent/extensions/onetree.ts"
 }
-# the dsh plugin: onetree's guard before each tool call, with dsh's tools mapped onto the shapes it reads (a bash
-# workdir is where the command is judged), and the session hint when a session starts. dsh lets a plugin allow or deny,
-# never rewrite. Its workspace-write sandbox keeps a worktree's git directory read-only, as Codex's does, but takes
-# grants while it runs: a session in a worktree is granted what codex_grants lists, so no launch flag is needed
+# the dsh plugin follows a session's own working directory, which dsh stores and restores (resume, clear, compact,
+# fork); onetree keeps no record of which session has which worktree (docs/design/dsh-session-worktree.md). When a
+# session is announced (agent/created) with that directory in a guarded main checkout, the plugin runs `onetree auto dsh`
+# there, outside dsh's sandbox, opens the worktree and what codex_grants lists in the session's sandbox (whose own root
+# stays the folder the session was created in), moves the working directory there and says so in one message. A
+# session already in a worktree only has it opened. Before each tool call it opens the worktree the working directory
+# is in, if that is not done yet, and asks onetree's guard, with dsh's tools mapped onto the shapes it reads and the
+# call judged where it runs: a bash workdir, else the working directory. dsh lets a plugin allow or deny, never rewrite
 render_dsh_plugin() {
-  local t
-  t=$(cat <<'DSHPLUGIN'
-// onetree for dsh, managed by `onetree install`: the guard before each tool call, the session hint at start
-import { spawnSync } from "node:child_process";
+  local t   # read, not $(cat <<…): bash 3.2 pairs the quotes of a here-document inside $(), and this text has apostrophes
+  IFS= read -r -d '' t <<'DSHPLUGIN' || true
+// onetree for dsh, managed by `onetree install`: a worktree for a session started in a guarded main checkout, the
+// guard before each tool call, the session hint
+import { execFile, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { realpathSync } from "node:fs";
 
 const ONETREE = "@ONETREE@";
+const AUTO_MINUTES = 10;   // a worktree's bootstrap (a dependency install) can take minutes
 export const name = "onetree";
 
 function run(args, input, cwd) {
   return spawnSync(ONETREE, args, { encoding: "utf8", timeout: 15000, cwd: cwd || process.cwd(), input });
+}
+// never spawnSync for `auto`: it would stop the server, and every session it serves, for as long as bootstrap takes.
+// The plain command the shell wrapper runs: `auto` binds its worktree to no session, whatever the environment holds
+function auto(cwd, signal) {
+  return new Promise(resolve => {
+    execFile(ONETREE, ["auto", "dsh"], { encoding: "utf8", timeout: AUTO_MINUTES * 60000, cwd, signal },
+      (error, stdout, stderr) => resolve({ error, tree: error ? "" : String(stdout || "").trim(), stderr: String(stderr || "").trim() }));
+  });
 }
 
 export function shape(tool, a) {
@@ -2543,48 +2578,128 @@ export function shape(tool, a) {
   return null;
 }
 
-function where(agent) {
+// neither service is in every profile: without the working directory a session cannot be moved, without the policy
+// there is no sandbox to open
+let policy = null, directory = null;
+const agents = new Map();        // session id -> live agent: where a subagent's parent is found
+const opened = new WeakMap();    // session object -> the folders its sandbox is open for: worktree roots, and working directories settled
+const waiting = new WeakMap();   // session object -> the worktree made for it that it has not been moved into yet
+
+// where a call runs when it names no folder: the session's working directory, which this plugin (or the agent) may
+// have moved; the folder it was created in when the profile has no working-directory service
+async function here(agent, signal) {
   const header = (agent && agent.session && agent.session.header) || {};
-  return { cwd: header.cwd || process.cwd(), session_id: header.id || "" };
+  let cwd = header.cwd || process.cwd();
+  if (directory && agent) { try { cwd = await directory.ensure(agent, signal); } catch (e) { /* judged where it was created */ } }
+  return { cwd, session_id: header.id || "" };
 }
 
-// a grant lasts for the live session, so it is made once per session object: again after a resume or a restart
-let policy = null;
-const granted = new WeakSet();
-function grant(agent) {
+// Open the session's sandbox for the worktree dir is in: its root and what `onetree codex-grants` lists, by real path
+// (the sandbox refuses a call outright over a root that is not one), all or nothing. A grant lasts for the live
+// session object, so the state is kept per session object and worktree root: made again after a resume, and for
+// another worktree when the working directory changes. -> "" when open, or there is nothing to open (a main checkout,
+// no sandbox policy in the profile); else why not. mustList: dir is a worktree, so an empty list is a failure
+function open(session, dir, mustList) {
+  if (!policy || !session) return "";
+  let done = opened.get(session);
+  if (!done) opened.set(session, done = new Set());
+  if (done.has(dir)) return "";
+  const r = run(["codex-grants", dir]);
+  const dirs = String(r.stdout || "").split("\n").filter(d => d && d !== "--add-dir");
+  if (r.status !== 0) return "`onetree codex-grants` failed";
+  if (!dirs.length) {
+    if (mustList) return "`onetree codex-grants` listed no git folders for it";
+    done.add(dir); return "";
+  }
+  const top = spawnSync("git", ["-C", dir, "rev-parse", "--show-toplevel"], { encoding: "utf8", timeout: 15000 });
+  if (top.status !== 0) return "git could not name the worktree " + dir + " is in";
+  const made = [];
+  try {
+    const root = realpathSync.native(String(top.stdout).trim());
+    if (!done.has(root)) for (const d of [root, ...dirs]) made.push(policy.registerWritableRoot(session, realpathSync.native(d)));
+    done.add(root); done.add(dir);
+  } catch (e) {
+    for (const undo of made) { if (typeof undo === "function") undo(); }   // the next try starts clean
+    return String((e && e.message) || e);
+  }
+  return "";
+}
+// grants first, then the move: a session is moved only into a worktree its sandbox lets it write and commit in.
+// -> "" when moved, else why not; tried again before each tool call
+async function enter(agent, signal) {
+  const tree = waiting.get(agent.session);
+  const why = open(agent.session, tree, true);
+  if (why) return "dsh's sandbox could not be opened for it: " + why;
+  try { await directory.set(agent, tree, signal); } catch (e) { return String((e && e.message) || e); }
+  waiting.delete(agent.session);
+  return "";
+}
+
+async function settle(agent, signal) {
   const session = agent && agent.session;
-  if (!policy || !session || granted.has(session)) return;
-  granted.add(session);
-  const cwd = where(agent).cwd;
-  for (const dir of String(run(["codex-grants", cwd], "", cwd).stdout || "").split("\n")) {
-    if (dir && dir !== "--add-dir") { try { policy.registerWritableRoot(session, dir); } catch (e) { /* the sandbox refuses it: the commit fails as before */ } }
+  if (!session) return;
+  const header = session.header || {};
+  if (header.id) agents.set(header.id, agent);
+  let at = (await here(agent, signal)).cwd, note = "";
+  if (header.origin === "subagent") {
+    // dsh starts a subagent in its parent's working directory. One it left in the folder of its header (the parent's
+    // original folder) is put where the parent works; with the parent unknown it stays. Never a worktree of its own
+    const parent = agents.get(header.parentSession);
+    if (directory && parent && at === header.cwd) {
+      const to = (await here(parent, signal)).cwd;
+      if (to !== at) { try { at = await directory.set(agent, to, signal); } catch (e) { /* stays where dsh put it */ } }
+    }
+  } else if (directory && (waiting.has(session) || run(["auto", "--check"], "", at).status === 0)) {
+    if (!waiting.has(session)) {   // one made earlier and not entered yet is entered now, not made again
+      const r = await auto(at, signal);
+      if (r.tree) waiting.set(session, realpathSync.native(r.tree));
+      else {
+        const why = r.error && r.error.killed ? "`onetree auto dsh` did not finish in " + AUTO_MINUTES + " minutes" : r.stderr.split("\n").pop() || String((r.error && r.error.message) || "no worktree was printed");
+        note = "onetree: could not make a worktree for this session (" + why + "), so it stays in " + at + ", the read-only main checkout.";
+      }
+    }
+    const tree = waiting.get(session);
+    if (tree) {
+      const why = await enter(agent, signal);
+      if (why) note = "onetree: a worktree for this session was made at " + tree + ", but the session was not moved into it (" + why + "), so it stays in " + at + ", the read-only main checkout. onetree tries again before each tool call.";
+      else at = tree;
+    }
+  }
+  const why = open(session, at);   // already in a worktree (a resume, a fork, a subagent, a session started there): opened, nothing made or moved
+  if (why && !note) note = "onetree: dsh's sandbox could not be opened for the worktree this session works in, " + at + " (" + why + "), so writes and commits there fail. onetree tries again before each tool call.";
+  // asked from the folder the session was created in: for a session moved out of a main checkout, the checkout the hint is about
+  const hint = String(run(["session"], JSON.stringify({ cwd: at, session_id: header.id || "", agent: "dsh" }), header.cwd || at).stdout || "").trim();
+  const text = waiting.has(session) ? note : [note, hint].filter(Boolean).join("\n");   // not moved yet: the hint would say to make a worktree
+  if (text && agent.inject) {
+    agent.inject(Object.freeze({ id: randomUUID(), role: "user", content: [{ type: "text", text }], source: { kind: "onetree" } }));   // dsh refuses the retired { kind: "plugin" } wrapper: a producer names its own kind
   }
 }
 
 export function apply(ctx) {
-  // the sandbox policy is not in every profile: the guard must load without it
-  if (ctx.inject) ctx.inject(["sandboxPolicy"], scope => { policy = scope.sandboxPolicy; });
+  if (ctx.inject) {
+    ctx.inject(["sandboxPolicy"], scope => { policy = scope.sandboxPolicy; });
+    ctx.inject(["workingDirectory"], scope => { directory = scope.workingDirectory; });
+  }
   ctx.on("tools/pre-execute", async (exec, next) => {
-    grant(exec.agent);
+    const agent = exec.agent, session = agent && agent.session;
+    if (session && directory && waiting.has(session)) await enter(agent, exec.signal);
+    const w = await here(agent, exec.signal);
+    open(session, w.cwd);   // the sandbox is the enforcement: a worktree that is not open yet fails writes there, and is tried again on the next call
     const call = shape(exec.name, exec.arguments);
     if (!call) return next();
-    const w = where(exec.agent);
     const r = run(["guard"], JSON.stringify({ ...call, ...w, agent: "dsh" }), w.cwd);
     if (r.status === 0) return next();
     return { kind: "deny", reason: String(r.stderr || (r.error && r.error.message) || "onetree guard unavailable").trim() };
   });
-  ctx.on("agent/session-start", ({ agent }) => {
-    grant(agent);
-    const w = where(agent);
-    const text = String(run(["session"], JSON.stringify({ ...w, agent: "dsh" }), w.cwd).stdout || "").trim();
-    if (text && agent && agent.inject) {
-      agent.inject(Object.freeze({ id: randomUUID(), role: "user", content: [{ type: "text", text }], source: { kind: "plugin", plugin: "onetree" } }));
-    }
+  // a listener that throws fails the session's creation: whatever goes wrong here, the guard still stands
+  ctx.on("agent/created", async ({ agent, signal }) => { try { await settle(agent, signal); } catch (e) { /* the session starts where it was created */ } });
+  ctx.on("agent/disposed", ({ agent }) => {
+    const id = agent && agent.session && agent.session.header && agent.session.header.id;
+    if (agents.get(id) === agent) agents.delete(id);
   });
 }
 DSHPLUGIN
-)
-  printf '%s\n' "${t//@ONETREE@/$BIN}"
+  printf '%s' "${t//@ONETREE@/$BIN}"
 }
 # A Codex under workspace-write may write only its writable roots, and .git is always read-only inside them, so a commit
 # in a worktree fails. Grant exactly what onetree's workflow writes there: objects, the worktree's own git dir (index,
@@ -2597,19 +2712,21 @@ DSHPLUGIN
 CODEX_GIT="'fetch.writefetchhead=false' 'maintenance.auto=false' 'gc.auto=0'"
 # worktree — the --add-dir arguments, one word per line; a directory that will hold refs is created now
 codex_grants() {
-  local c g b x r
+  local c g b x r rc=0
   c=$(git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 0
   g=$(git -C "$1" rev-parse --path-format=absolute --git-dir 2>/dev/null) || return 0
   [[ "$g" != "$c" ]] || return 0   # a main checkout: its git dir is .git itself, which is never granted
   printf '%s\n%s\n%s\n%s\n' --add-dir "$c/objects" --add-dir "$g"
   b=$(git -C "$1" symbolic-ref -q HEAD 2>/dev/null || true)
-  if [[ "$b" == refs/heads/*/* ]]; then for x in "$c/${b%/*}" "$c/logs/${b%/*}"; do mkdir -p "$x" 2>/dev/null && printf '%s\n%s\n' --add-dir "$x"; done; fi
+  # a directory that cannot be made is a grant missing: the rest is still listed, but the exit says the list is short
+  if [[ "$b" == refs/heads/*/* ]]; then for x in "$c/${b%/*}" "$c/logs/${b%/*}"; do _grant_dir "$x" || rc=1; done; fi
   while IFS= read -r r; do
     [[ -n "$r" ]] || continue
-    for x in "$c/refs/remotes/$r" "$c/logs/refs/remotes/$r"; do mkdir -p "$x" 2>/dev/null && printf '%s\n%s\n' --add-dir "$x"; done
+    for x in "$c/refs/remotes/$r" "$c/logs/refs/remotes/$r"; do _grant_dir "$x" || rc=1; done
   done < <(git -C "$1" remote 2>/dev/null)
-  return 0
+  return $rc
 }
+_grant_dir() { mkdir -p "$1" 2>/dev/null && [[ -d "$1" ]] && { printf '%s\n%s\n' --add-dir "$1"; return 0; }; printf 'onetree: codex-grants: cannot prepare %s\n' "$1" >&2; return 1; }
 # seconds command… — killed after that long (macOS has no timeout)
 bounded() { perl -e 'alarm shift @ARGV; exec { $ARGV[0] } @ARGV or exit 127' "$@"; }
 YSTART='# onetree:start (managed by `onetree install`; edits inside are overwritten)'; YEND='# onetree:end'
@@ -3599,7 +3716,9 @@ block() {
   # Claude sets agent_id only on a subagent's calls
   h=$(host_of) || h=; [[ -n "${aid:-}" && "$h" == claude-* ]] && h=claude-subagent
   case "${agent:-}" in pi|dsh) h=$agent ;; esac   # its extension or plugin says who is asking: no guess from the process
-  own=$(bound_worktrees "${sid:-}" "$([[ "$apid" == null ]] || echo "$apid")" "$2" | awk 'NR == 1') || own=
+  # dsh's plugin sends the session's working directory as cwd: inside a worktree of this checkout, the session works there
+  own=; [[ "$h" != dsh ]] || own=$(worktree_at "${scwd:-}" "$2") || own=
+  if [[ -n "$own" ]]; then h=dsh-moved; else own=$(bound_worktrees "${sid:-}" "$([[ "$apid" == null ]] || echo "$apid")" "$2" | awk 'NR == 1') || own=; fi
   if [[ -n "$own" ]]; then where="This session already has a worktree, $own: do it there. To work there, $(move_hint "$h" "$own" "$2")"
   else where="Work in a worktree instead: run \`onetree new <slug> $r\`, then $(move_hint "$h" "<path>" "$2")"; fi
   printf 'onetree guard (%s): %s is the read-only main checkout of %s. %s Never switch, stash, reset, edit, or run scripts, servers or tests in the main checkout; reading is fine.%s\n' "${3:-a write}" "$1" "$r" "$where" "$note" >&2
@@ -3665,12 +3784,13 @@ _patch_guard() {
   fp=
 }
 cmd_guard() {
-  local j tool cwd fp cmd r p out why sid agent aid pd d tagged np k pt
+  local j tool cwd scwd fp cmd r p out why sid agent aid pd d tagged np k pt
   j=$(cat) || exit 0
   { IFS= read -r -d '' tool; IFS= read -r -d '' cwd; IFS= read -r -d '' sid; IFS= read -r -d '' agent; IFS= read -r -d '' cmd; IFS= read -r -d '' d; IFS= read -r -d '' aid; } \
     < <(jq -j '[.tool_name, .cwd, .session_id, '"$AGENT_JQ"', (.tool_input.command // .tool_input.cmd), .tool_input.workdir, .agent_id] | map((. // "" | tostring) + "\u0000") | add' <<<"$j" 2>/dev/null) || true
   [[ -n "$tool" ]] || exit 0   # one jq start per call, every field at once; bad JSON still passes
   [[ -n "$cwd" ]] || cwd=$PWD
+  scwd=$cwd   # the session's own directory, whatever workdir a call names
   # the pi extension says so; Claude and Codex are told apart by where they keep transcripts
   [[ -n "$agent" ]] || agent=unknown
   case "$tool" in

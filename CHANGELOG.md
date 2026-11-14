@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- `onetree auto` takes the next free name (`<agent>-<time>-2`, `-3`, …) when the
+  worktree folder or branch of that second is taken. Two sessions started in
+  the same second were handed one worktree, because `onetree new` returns a
+  folder that exists as it is; three dsh sessions made in one second on the
+  Linux CI runner showed it (#20). The name is checked, not locked.
+
 - `onetree new` and `carry` record the new worktree as trusted in
   `~/.claude.json` when Claude already trusts its main checkout. The Claude
   desktop app asked for workspace trust on every `change_directory` into a
@@ -9,6 +15,29 @@
   "Couldn't move the session to …": a session that ended its turn while a
   background agent worked never moved. A `review` checkout is not recorded.
 
+- A dsh session started in the browser on a guarded main checkout gets its
+  worktree with no step by the user or the agent. Nothing made one (the web UI
+  picks the session's folder, so the shell wrapper never ran), the first script
+  was refused, and the agent could not follow the refusal: dsh's sandbox
+  stopped `onetree new` at `~/.config/onetree/config: Operation not permitted`
+  (#20). The dsh plugin now follows the session's working directory. When dsh
+  announces a session with it in a guarded main checkout, the plugin runs
+  `onetree auto dsh` there (the wrapper's command, unchanged: the worktree is
+  `dsh-<timestamp>`), opens the worktree and its git folders in the session's
+  sandbox, moves the working directory there and tells the session once. A
+  session already in a worktree (a resume, a fork, a subagent) only has it
+  opened; before each tool call the plugin opens the worktree the working
+  directory is in, if that is not done yet, and the guard judges the call in
+  that directory. A session is moved only after every grant is made; if one
+  cannot be, it is told why and the next call tries again. `onetree
+  codex-grants` now exits non-zero when a folder it must list cannot be
+  prepared (it used to skip it and exit 0). The plugin's session hint had
+  never been shown: it listened to `agent/session-start`, which dsh does not
+  emit (the event is `agent/created`). The hint and a refusal now say "this
+  session works in <worktree>" when the working directory is in one, and no
+  longer that a dsh session cannot change its folder. The web UI still lists
+  the session under the folder it was created in. Run `onetree update` to
+  rewrite the plugin.
 - A sandboxed dsh can commit in its worktree. dsh's `workspace-write` sandbox
   (the headless default) kept the worktree's git directory read-only, so
   `git commit` failed on `index.lock`; onetree granted those folders to Codex

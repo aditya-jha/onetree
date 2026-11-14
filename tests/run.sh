@@ -260,6 +260,11 @@ kill $CA $CB $H1 $H2 $ND $NR $CX $PI $CL $CC 2>/dev/null; wait $CA $CB $H1 $H2 $
 
 # ---- gc verdicts
 json_is "gc --dry-run --json: a fresh worktree is kept as young" "$($ONETREE gc --dry-run --json "$MAIN")" '.[0].slug == "feat-a" and .[0].gc == {action:"keep", code:"young", reason:"no merged PR and younger than 24h"}'
+# a fresh worktree's head is a main commit, so any PR cut from main later contains it: that says nothing about the worktree
+later=$(git -C "$p" commit-tree -p "$(git -C "$p" rev-parse HEAD)" -m later "$(git -C "$p" rev-parse 'HEAD^{tree}')")
+printf '%s\n' '#!/bin/sh' 'echo "$*" >> "$GH_LOG"' "case \"\$*\" in *'--state merged'*) echo $later ;; esac" > "$TMP/bin/gh"
+json_is "gc: a fresh worktree stays young when a later merged PR contains its head" "$($ONETREE gc --dry-run --json --fresh "$MAIN")" '.[0].slug == "feat-a" and .[0].gc.code == "young"'
+printf '%s\n' '#!/bin/sh' 'echo "$*" >> "$GH_LOG"' 'exit 0' > "$TMP/bin/gh"
 has "gc --dry-run (text): the keep line gc has always logged" "$($ONETREE gc --dry-run "$MAIN")" "^keep $TMP/worktrees/main/feat-a: no merged PR and younger than 24h\$"
 echo dirt > "$p/dirt"
 json_is "gc: dirty worktree kept with code dirty" "$($ONETREE gc --dry-run --json "$MAIN")" '.[0].gc.code == "dirty" and .[0].dirty == 1'

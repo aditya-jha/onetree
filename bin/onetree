@@ -249,7 +249,8 @@ repos_all() {  # one real path per line; paths may contain spaces
   done < <(gcfg_all onetree.repo)
   return 0
 }
-guarded_mains() { gcfg_all onetree.guarded; }   # cached list, so the per-tool-call guard costs one git read
+# cached list, so the per-tool-call guard costs one git read: cmd_guard reads it once into GUARDED_MEMO (it never refreshes it)
+guarded_mains() { if [[ -n "${GUARDED_MEMO+x}" ]]; then [[ -z "$GUARDED_MEMO" ]] || printf '%s\n' "$GUARDED_MEMO"; else gcfg_all onetree.guarded; fi; }
 refresh_guarded() {  # recompute the cache from every registered repo's effective config
   local r; [[ -f "$CFG" ]] && git config -f "$CFG" --unset-all onetree.guarded 2>/dev/null || true
   while IFS= read -r r; do
@@ -3789,6 +3790,7 @@ cmd_guard() {
   { IFS= read -r -d '' tool; IFS= read -r -d '' cwd; IFS= read -r -d '' sid; IFS= read -r -d '' agent; IFS= read -r -d '' cmd; IFS= read -r -d '' d; IFS= read -r -d '' aid; } \
     < <(jq -j '[.tool_name, .cwd, .session_id, '"$AGENT_JQ"', (.tool_input.command // .tool_input.cmd), .tool_input.workdir, .agent_id] | map((. // "" | tostring) + "\u0000") | add' <<<"$j" 2>/dev/null) || true
   [[ -n "$tool" ]] || exit 0   # one jq start per call, every field at once; bad JSON still passes
+  GUARDED_MEMO=$(gcfg_all onetree.guarded)
   [[ -n "$cwd" ]] || cwd=$PWD
   scwd=$cwd   # the session's own directory, whatever workdir a call names
   # the pi extension says so; Claude and Codex are told apart by where they keep transcripts

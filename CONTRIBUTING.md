@@ -21,8 +21,12 @@ under `ui/src`, run `npm run build` and commit `ui/dist` with it.
 `tests/run.sh` is hermetic: `HOME`, the registry, the event log and the
 caches live in a temp dir, origin is a local bare repo, and a stub `gh` on
 `PATH` answers from JSON files and logs every call, which is how the caches
-are checked. It never touches your real config or GitHub, and takes a few
-minutes. Its fixtures cover:
+are checked. It never touches your real config or GitHub. It runs in parts,
+in parallel: a `# ==== part N` line starts a block of part N, and each part
+runs in its own process and temp `HOME` with the helpers and fixture above the
+first mark. A new section goes in the part whose state it uses, or in the
+shortest part when it uses none. `ONETREE_TEST_PART=serial bash tests/run.sh`
+runs every part in one process, in file order. Its fixtures cover:
 
 - `new`, `ls`, gc's verdicts across the young, dirty, not-merged and merged
   states, real removals, `info` provenance, `doctor` and `snapshot` shapes,

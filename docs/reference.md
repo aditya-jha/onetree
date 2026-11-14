@@ -419,8 +419,9 @@ in a fork (the folder the session was created in never changes). When dsh
 announces a session (`agent/created`):
 
 - **Working directory in a guarded main checkout:** the plugin runs `onetree
-  auto dsh` there, outside dsh's sandbox and without blocking the server
-  (bootstrap may take minutes; it gives up after ten), opens the worktree and
+  auto dsh` there, outside dsh's sandbox and after the announcement returns,
+  so the new session shows at once and its first tool call waits for the
+  worktree (bootstrap may take minutes; it gives up after ten), opens the worktree and
   its git folders in the session's sandbox, moves the working directory into
   the worktree, and injects one message naming the worktree, its branch (the
   ordinary placeholder, `<prefix>dsh-<timestamp>`) and the read-only main

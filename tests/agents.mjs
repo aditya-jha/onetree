@@ -96,7 +96,7 @@ async function dsh(opts = {}) {
       injected.push({ role: m.role, text: m.content[0].text, plugin: m.source.kind });
     } };
   };
-  const created = async (agent, source = "startup") => { await on["agent/created"]({ agent, source }); return agent; };
+  const created = async (agent, source = "startup") => { await on["agent/created"]({ agent, source }); await mod.settled(agent); return agent; };
   const call = async (name, args, agent = { session: { header: { cwd: mirror, id: "dsh-1" } } }) => {
     let passed = false;
     const r = await on["tools/pre-execute"]({ name, arguments: args, agent }, async () => { passed = true; return { kind: "allow" }; });
@@ -160,6 +160,13 @@ const gitDirs = (host, id) => host.grants.filter(g => g[0] === id).map(g => g[1]
   const other = realpathSync(out.pi.worktree), opened = () => host.grants.some(g => g[0] === "dsh-web" && g[1] === other);
   host.dirs.set("dsh-web", other);
   out.dshElsewhere = { before: opened(), after: (await host.call("read", {}, again), opened()) };
+}
+// dsh: the announcement returns before the worktree is made (dsh shows the session only then); the first tool call waits for it
+{
+  const host = await dsh();
+  const agent = host.session("dsh-quick");
+  await host.on["agent/created"]({ agent, source: "startup" });
+  out.dshQuick = { movedAtCreate: host.moves.length, plain: await host.call("bash", { command: "git stash" }, agent), moves: host.moves.length };
 }
 // dsh: `auto` fails (here an onetree whose `auto dsh` fails, and is itself in every other call): the session stays, is told why, and is still guarded
 {

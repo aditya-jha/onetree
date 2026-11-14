@@ -2570,6 +2570,9 @@ function auto(cwd, signal) {
   });
 }
 
+// what a session's announcement still has to do (the tests wait on it); undefined once done
+export function settled(agent) { return pending.get(agent && agent.session); }
+
 export function shape(tool, a) {
   a = a || {};
   if (tool === "bash") return { tool_name: "Bash", tool_input: { command: a.command, workdir: a.workdir } };
@@ -2585,6 +2588,7 @@ let policy = null, directory = null;
 const agents = new Map();        // session id -> live agent: where a subagent's parent is found
 const opened = new WeakMap();    // session object -> the folders its sandbox is open for: worktree roots, and working directories settled
 const waiting = new WeakMap();   // session object -> the worktree made for it that it has not been moved into yet
+const pending = new WeakMap();   // session object -> its announcement, still being handled: the session shows at once, its first tool call waits
 
 // where a call runs when it names no folder: the session's working directory, which this plugin (or the agent) may
 // have moved; the folder it was created in when the profile has no working-directory service
@@ -2683,6 +2687,7 @@ export function apply(ctx) {
   }
   ctx.on("tools/pre-execute", async (exec, next) => {
     const agent = exec.agent, session = agent && agent.session;
+    if (session && pending.has(session)) await pending.get(session);
     if (session && directory && waiting.has(session)) await enter(agent, exec.signal);
     const w = await here(agent, exec.signal);
     open(session, w.cwd);   // the sandbox is the enforcement: a worktree that is not open yet fails writes there, and is tried again on the next call
@@ -2692,8 +2697,14 @@ export function apply(ctx) {
     if (r.status === 0) return next();
     return { kind: "deny", reason: String(r.stderr || (r.error && r.error.message) || "onetree guard unavailable").trim() };
   });
-  // a listener that throws fails the session's creation: whatever goes wrong here, the guard still stands
-  ctx.on("agent/created", async ({ agent, signal }) => { try { await settle(agent, signal); } catch (e) { /* the session starts where it was created */ } });
+  // dsh shows a new session only once every agent/created listener returns, and a worktree takes seconds to make: it is made
+  // after the listener returns, without the creation's signal, and the session's first tool call waits for it. A listener
+  // that throws fails the session's creation: whatever goes wrong here, the guard still stands
+  ctx.on("agent/created", ({ agent }) => {
+    const session = agent && agent.session;
+    const done = settle(agent).catch(() => { /* the session starts where it was created */ });
+    if (session) { pending.set(session, done); done.then(() => { if (pending.get(session) === done) pending.delete(session); }); }
+  });
   ctx.on("agent/disposed", ({ agent }) => {
     const id = agent && agent.session && agent.session.header && agent.session.header.id;
     if (agents.get(id) === agent) agents.delete(id);

@@ -1048,6 +1048,8 @@ if [[ -n "$NODE" ]] && "$NODE" -e 'process.exit(Number(process.versions.node.spl
   json_is "dsh: a session announced in a guarded main checkout gets a worktree with no step of its own: one made by the plain auto (named by the time), opened in its sandbox with its git folders, its working directory moved there, and one message of the plugin's own naming the worktree, its branch and the read-only main checkout" "$ag" \
     '.dshAuto | .made == 1 and (.tree | test("/cw-main/dsh-[0-9]{6}-[0-9]{6}(-[0-9]+)?$")) and .moves == 1 and .granted and .gitDirs == 6 and (.branch | test("^feature/dsh-"))
      and (.injected | length == 1 and .[0].role == "user" and .[0].plugin == "onetree") and (.branch as $b | .tree as $t | .injected[0].text | contains("this session works in a worktree of it, " + $t + ", on the branch " + $b) and test("guarded read-only mirror") and test("rename it before the first push"))'
+  json_is "dsh: a new session is shown at once: the worktree is made after its announcement returns, and its first tool call waits for it and runs there" "$ag" \
+    '.dshQuick == {movedAtCreate: 0, plain: "allow", moves: 1}'
   json_is "dsh: the guard is sent the session's working directory, so after the move a plain command passes and the same command with workdir in the main checkout is refused" "$ag" \
     '.dshAuto.plain == "allow" and .dshAuto.inMain == "deny"'
   json_is "dsh: a resumed session (announced again as a new session object, its working directory already in the worktree) gets no new worktree and no move, and is granted again" "$ag" \

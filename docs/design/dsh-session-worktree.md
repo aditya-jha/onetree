@@ -35,10 +35,11 @@ When dsh announces a session (`agent/created`):
 1. **Working directory in a guarded main checkout:** the plugin runs plain
    `onetree auto dsh` there, the command the shell wrapper runs (`auto`
    binds its worktree to no session). A plugin runs in dsh's server process,
-   outside the sandbox. The call is asynchronous with a ten-minute limit: dsh
-   holds the session's queued input until the listener returns, and a
-   synchronous spawn would stop the server for every session while bootstrap
-   runs. It then registers the worktree, by real path (dsh fails a call over a
+   outside the sandbox. The call is asynchronous with a ten-minute limit, and
+   the listener does not wait for it: dsh shows a new session only once every
+   `agent/created` listener returns, and making a worktree takes seconds, so
+   the session's first tool call waits for it instead. A synchronous spawn
+   would stop the server for every session while bootstrap runs. It then registers the worktree, by real path (dsh fails a call over a
    root that is a symlink alias), and each `onetree codex-grants` folder as
    writable roots of the session, all of them or none: if `codex-grants`
    fails or a registration throws, the ones made are taken back. Only then

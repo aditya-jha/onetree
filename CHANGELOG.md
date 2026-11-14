@@ -6,6 +6,12 @@
   guarded checkouts once instead of up to three times: about 77 ms a call instead of 108 ms
   on macOS, where each git start goes through the xcrun shim (#28).
 
+- dsh: a new session shows at once in a guarded repo. The plugin made its
+  worktree before returning from dsh's session announcement, so "New Session"
+  hung for the 10–20 s that takes and looked like nothing happened (a second
+  click made a second worktree). The worktree is now made in the background
+  and the session's first tool call waits for it.
+
 - `onetree auto` takes the next free name (`<agent>-<time>-2`, `-3`, …) when the
   worktree folder or branch of that second is taken. Two sessions started in
   the same second were handed one worktree, because `onetree new` returns a

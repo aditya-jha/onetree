@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- `onetree auto` takes the next free name (`<agent>-<time>-2`, `-3`, …) when the
+  worktree folder or branch of that second is taken. Two sessions started in
+  the same second were handed one worktree, because `onetree new` returns a
+  folder that exists as it is; three dsh sessions made in one second on the
+  Linux CI runner showed it (#20). The name is checked, not locked.
+
 - `onetree new` and `carry` record the new worktree as trusted in
   `~/.claude.json` when Claude already trusts its main checkout. The Claude
   desktop app asked for workspace trust on every `change_directory` into a

@@ -557,8 +557,10 @@ relative path lands in the mirror and is refused. A shell command's `workdir`
 A pi session can't change its folder, so the extension follows the worktree it
 makes: after `onetree new` or `carry` it asks onetree which worktree that was
 (`onetree bound`), keeps it in the session (so `/resume` restores it), and runs
-each bash command and resolves relative read, write and edit paths there. It
-trusts a worktree whose main checkout `~/.pi/agent/trust.json` trusts; a
+each bash command and resolves relative read, write and edit paths there. Once
+that worktree is gone (gc removed it after its PR merged), the next bash, write
+or edit call is refused with a reason naming it, and later calls run in the
+folder the session started in. It trusts a worktree whose main checkout `~/.pi/agent/trust.json` trusts; a
 review checkout is never trusted that way.
 
 Codex's `workspace-write` sandbox keeps a worktree's git directory read-only,

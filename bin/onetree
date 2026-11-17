@@ -2547,6 +2547,7 @@ function trustedWorktree(cwd: string) {
 export default function (pi: Pi) {
   let hinted = false;
   let worktree = "";
+  let gone = "";   // the bound worktree this session was already told is gone
   const here = () => (worktree && existsSync(worktree) ? worktree : "");
 
   pi.on("session_start", (_event: unknown, ctx?: Ctx) => {
@@ -2585,6 +2586,12 @@ export default function (pi: Pi) {
   });
 
   pi.on("tool_call", (event: { toolName: string; input: { command?: string; path?: string } }, ctx?: Ctx) => {
+    // a worktree gc removed (its PR merged) is said once, not dropped silently: the next calls run in the folder the session started in (#43)
+    if (worktree && gone !== worktree && !existsSync(worktree) && ["bash", "write", "edit"].includes(event.toolName)) {
+      gone = worktree;
+      const start = (ctx && ctx.cwd) || process.cwd();
+      return { block: true, reason: "onetree: " + worktree + ", the worktree this session worked in, is gone (onetree gc removes one once its PR merges). This call did not run. From now on commands run in " + start + "; for more changes run `onetree new <slug>` first." };
+    }
     const dir = here();
     const lead = "cd " + quote(dir) + " && ";
     if (dir && event.toolName === "bash" && event.input.command && !event.input.command.startsWith(lead)) {

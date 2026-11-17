@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- pi: when the worktree a session made is gone (gc removed it after its PR
+  merged), the next bash, write or edit call is refused with a reason naming
+  it, instead of quietly running in the folder the session started in. A
+  resumed or forked pi-nexus session did that in an unguarded main checkout on
+  2026-11-16 (#43). Later calls run in that folder, judged by the guard as
+  usual.
 - `onetree install` (and so `update`) on macOS waits until launchd has let go
   of the old gc job before loading the new one, and retries the load. On
   2026-11-14 the load right after the unload failed with `Bootstrap failed: 5:

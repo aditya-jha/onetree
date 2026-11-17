@@ -1077,6 +1077,8 @@ if [[ -n "$NODE" ]] && "$NODE" -e 'process.exit(Number(process.versions.node.spl
      and .pi.write.input.path == (.pi.worktree + "/src/a.ts") and (.pi.write.blocked | not) and .pi.absolute.blocked and .pi.read.input.path == (.pi.worktree + "/README.md")'
   json_is "pi: /resume restores the session's worktree; without onetree every call is refused" "$ag" \
     '.piResumed.input.command == ("cd '"'"'" + .pi.worktree + "'"'"' && ls") and .piMissing.blocked and (.piMissing.reason | test("ENOENT|unavailable"))'
+  json_is "pi: a session whose worktree is gone is told so on its first call, which does not run, and its next calls run in its own folder (#43)" "$ag" \
+    '.piGone | .gone as $g | .first.blocked and (.first.reason | contains($g + ", the worktree this session worked in, is gone")) and .next == {input: {command: "ls"}, blocked: false, reason: ""}'
   json_is "pi: a worktree of a trusted main is trusted; the main itself, a review checkout and an untrusted main's worktree are left to pi" "$ag" \
     '.trust == ["yes", "undecided", "undecided", "undecided"]'
   json_is "dsh: calls take the guard's shapes (a bash workdir too) and are judged where they run; without onetree a call is denied" "$ag" \

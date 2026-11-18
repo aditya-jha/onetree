@@ -541,7 +541,7 @@ main_has_writable() { _chmod_walk "$(real "$1")" has-writable; }
 _git_dir() { git -C "$1" rev-parse --path-format=absolute --git-dir; }
 # worktree — onetree made it (gc tells it from other tools' by this)
 mark_ours() { { printf 'onetree\n' > "$(_git_dir "$1")/onetree"; } 2>/dev/null || true; }
-_park_lock_stale() {  # lock — 0 when its holder is dead. A live holder is never stale, however long it takes
+_link_lock_stale() {  # lock — 0 when its holder is dead. A live holder is never stale, however long it takes
   local lock=$1 holder pid
   # the lock is a symlink whose target is "pid time": made in one step
   if [[ -L "$lock" ]]; then holder=$(readlink "$lock" 2>/dev/null || true)
@@ -549,23 +549,26 @@ _park_lock_stale() {  # lock — 0 when its holder is dead. A live holder is nev
   elif [[ -d "$lock" ]]; then holder=$(cat "$lock/holder" 2>/dev/null || true); [[ -n "$holder" ]] || return 0
   else return 1; fi
   pid=${holder%% *}
-  [[ -n "$pid" ]] && ! kill -0 "$pid" 2>/dev/null
+  [[ "$pid" =~ ^[0-9]+$ && "$(LC_ALL=C kill -0 "$pid" 2>&1)" == *"No such process" ]]
+}
+try_link_lock() {
+  local lock=$1
+  # the lock and its holder in one step: no moment where it exists without one
+  [[ ! -d "$lock" ]] && ln -s "$$ $(date +%s)" "$lock" 2>/dev/null && return 0
+  # one taker at a time, and the holder checked again once we are it:
+  if _link_lock_stale "$lock" && mkdir "$lock.takeover" 2>/dev/null; then
+    # another
+    if _link_lock_stale "$lock"; then rm -rf "$lock"; ln -s "$$ $(date +%s)" "$lock" 2>/dev/null && { rmdir "$lock.takeover"; return 0; }; fi
+    rmdir "$lock.takeover"   # taker may have replaced the dead holder already
+  fi
+  return 1
 }
 acquire_park_lock() {
-  local gd=$1 lock
-  lock="$gd/onetree-park.lock"
+  local gd=$1
   if command -v flock >/dev/null 2>&1; then
     exec 9>"$gd/onetree-park.flock"
-    flock -n 9 || { printf 'onetree: park lock held (%s)\n' "$gd" >&2; return 1; }
-    return 0
-  fi
-  # the lock and its holder in one step: no moment where it exists without one
-  ln -s "$$ $(date +%s)" "$lock" 2>/dev/null && return 0
-  # one taker at a time, and the holder checked again once we are it:
-  if _park_lock_stale "$lock" && mkdir "$lock.takeover" 2>/dev/null; then
-    # another
-    if _park_lock_stale "$lock"; then rm -rf "$lock"; ln -s "$$ $(date +%s)" "$lock" 2>/dev/null && { rmdir "$lock.takeover"; return 0; }; fi
-    rmdir "$lock.takeover"   # taker may have replaced the dead holder already
+    flock -n 9 && return 0
+  elif try_link_lock "$gd/onetree-park.lock"; then return 0
   fi
   printf 'onetree: park lock held (%s)\n' "$gd" >&2
   return 1
@@ -636,26 +639,44 @@ listed_worktree() {
   local w; while IFS= read -r w; do [[ -n "$w" && "$(real "$w")" == "$2" ]] && return 0; done < <(worktrees_of "$1"); return 1
 }
 # ---- worktree owners: the agent sessions a worktree belongs to (onetree new, carry, launch), one per line of its git
-# dir's onetree-owners: session<TAB>pid<TAB>pid start. In the guard (OWNERS_CHECK=1) a worktree with owners, none of them
+# dir's onetree-owners: session<TAB>pid<TAB>pid start, with dashes for unused fields. A row identifies either a session
+# or a process. In the guard (OWNERS_CHECK=1) a worktree with owners, none of them
 # the caller, is judged like a guarded main: read-only to that caller. One without the file is anyone's
 OWNERS_CHECK=0; CALLER_PID=; CALLER_START=-
 owners_file() { local gd; gd=$(_git_dir "$1" 2>/dev/null) && printf '%s/onetree-owners\n' "$gd"; }
 own_tree() {  # path session pid start — add an owner, once; never fails. - for an empty field: read joins empty tab fields
-  local f l; [[ -n "$2$3" ]] || return 0; f=$(owners_file "$1") || return 0; l="${2:--}"$'\t'"${3:--}"$'\t'"${4:--}"
-  grep -qxF "$l" "$f" 2>/dev/null || printf '%s\n' "$l" >> "$f" 2>/dev/null || true
+  local f lock src=/dev/null tmp="" tries=0
+  [[ -n "$2" || ( -n "$3" && -n "$4" ) ]] || return 0
+  f=$(owners_file "$1") || return 0; lock="$f.lock"
+  until try_link_lock "$lock"; do
+    tries=$((tries+1))
+    if [[ $tries -ge 30 ]]; then printf 'onetree: could not lock worktree owners for %s\n' "$1" >&2; return 0; fi
+    sleep 0.1
+  done
+  [[ -e "$f" ]] && src=$f
+  # Every writer uses the same lock so concurrent joins cannot replace one another's rows.
+  if ! { tmp=$(mktemp "$f.XXXXXX") &&
+    printf '%s\t%s\t%s\n' "${2:--}" "${3:--}" "${4:--}" | LC_ALL=C awk -F '\t' '
+      NF == 3 && $1 != "" && $1 != "-" && !seen["s:" $1]++ { print $1 "\t-\t-" }
+      NF == 3 && $1 == "-" && $2 ~ /^[0-9]+$/ && $3 != "" && $3 != "-" && !seen["p:" $0]++ { print }
+    ' "$src" - > "$tmp" && [[ -s "$tmp" ]] && mv -f "$tmp" "$f"; }; then
+    rm -f "${tmp:-}"
+    printf 'onetree: could not record worktree owner for %s\n' "$1" >&2
+  fi
+  rm -f "$lock" || true
 }
 # owners file — 0 when the calling session owns it: by any session id it is known by (hook payload or environment, since
-# hosts disagree on which is which), or by its process. Nothing to know the caller by: 0, as before owners existed
+# hosts disagree on which is which), or by its process for a PID-only row. With no caller identity: 0, as before owners existed
 caller_owns() {
   local s p st ids=" ${sid:-} ${CLAUDE_CODE_SESSION_ID:-} ${CODEX_THREAD_ID:-} ${ONETREE_SESSION_ID:-} ${DSH_SESSION_ID:-} "
-  while IFS=$'\t' read -r s p st; do [[ "$s" != - && "$ids" == *" $s "* ]] && return 0; done < "$1"
+  while IFS=$'\t' read -r s p st; do [[ -n "$s" && "$s" != - && "$ids" == *" $s "* ]] && return 0; done < "$1"
   # by process only when no id matched: ps is the slow part, and a guard call may ask from several subshells
   if [[ "$CALLER_START" == - ]]; then
     CALLER_PID=${ONETREE_SESSION_PID:-$(agent_pid)}; CALLER_START=
     [[ "$CALLER_PID" =~ ^[0-9]+$ ]] && CALLER_START=$(ps -o lstart= -p "$CALLER_PID" 2>/dev/null | tr -s ' ' || true)
   fi
   while IFS=$'\t' read -r s p st; do
-    [[ -n "$CALLER_START" && "$p" == "$CALLER_PID" && "$st" == "$CALLER_START" ]] && return 0
+    [[ "$s" == - && -n "$CALLER_START" && "$p" == "$CALLER_PID" && "$st" == "$CALLER_START" ]] && return 0
   done < "$1"
   [[ -z "${ids// /}" && -z "$CALLER_START" ]]
 }
@@ -679,7 +700,7 @@ owners_backfill() {
   [[ -f "$EVENTS" ]] && grep -F "\"path\":$(jq -n --arg p "$1" '$p')" "$EVENTS" 2>/dev/null | grep -F '"kind":"new"' |
     jq -r 'select((.subagent // "") == "") | [(.session // "-" | if . == "" then "-" else . end), ((.pid // "-") | tostring), (.pidStart // "-" | if . == "" then "-" else . end)] | @tsv' 2>/dev/null |
     while IFS=$'\t' read -r s p st; do own_tree "$1" "${s#-}" "${p#-}" "${st#-}"; done || true
-  [[ -e "$f" ]] || { : > "$f"; } 2>/dev/null || true
+  [[ -e "$f" ]] || { : >> "$f"; } 2>/dev/null || true
 }
 guarded_main_of_path() {
   local p d m
@@ -3376,7 +3397,7 @@ cmd_doctor() {
     chk "guarded main $m has no user-writable working-tree entry" '! main_has_writable "$m"'
     chk "guarded main $m porcelain clean (or warn-only dirty is a FAIL)" '[[ -z "$(git -C "$m" status --porcelain)" ]]'
     gd=$(git -C "$m" rev-parse --path-format=absolute --git-dir 2>/dev/null) || continue
-    chk "park lock for $m is not stale" '! _park_lock_stale "$gd/onetree-park.lock"'
+    chk "park lock for $m is not stale" '! _link_lock_stale "$gd/onetree-park.lock"'
   done < <(guarded_mains)
   while IFS= read -r m; do
     [[ -n "$m" ]] || continue

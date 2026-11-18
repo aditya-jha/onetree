@@ -385,6 +385,8 @@ has that command judged, and a shell reading its commands from stdin
 (`bash <<EOF`, `… | bash`, `bash -s`) is refused. Tools that only print,
 search or send text (`echo`, `grep`, `rg`, `man`, `gh`, `jq`, `curl`, `ssh`)
 pass, also after `find -exec`; `gh pr checkout` and `gh repo sync` are writes.
+An `awk` program is read as awk, not as a command line: a comparison
+(`'$1>2'`) passes; `print > file`, a `|` pipe and `system()` are writes.
 
 **It can't be switched off by an agent**, from any directory. It refuses
 `onetree uninstall` while any repo is guarded, `onetree unregister` of a

@@ -7,6 +7,10 @@
   from, so a repo keeps one list instead of repeating it in `onetree.copy`. With a `.worktreeinclude`, `copy`'s `.env .env.local` default
   no longer applies; entries you set still do. `onetree info` shows it on the
   `copy` line.
+- The guard no longer refuses a read-only `awk` whose program compares with
+  `>` (`awk '$1>2 && $1<3'` was taken for a redirect into a file `2`). An awk
+  program is now judged as awk: `print > file`, a `|` pipe and `system()` are
+  refused in a guarded checkout.
 
 ## 1.2.0 (2026-11-18)
 

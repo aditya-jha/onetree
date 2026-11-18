@@ -3783,8 +3783,11 @@ _check_simple() {  # dir words_nl — prints rule\tpath, 0 if this simple comman
   # fail closed: a program the guard does not know may run what it is given (watch, flock -c, parallel, find -exec, …)
   if [[ $in_mirror == 1 ]]; then
     if ! _text_tool "$cmd0"; then
-       local -a rest=("$@"); local i j
+       local -a rest=("$@"); local i j awkp=0
+       # an awk program is awk, not shell: `$1>2` compares; print > file, a | pipe and system() write or run
+       case "${cmd0##*/}" in awk|gawk|mawk|nawk) awkp='system[[:space:]]*\(|(^|[^|])\|([^|]|$)|print[^;{}]*>' ;; esac
        for ((i = 0; i < ${#rest[@]}; i++)); do
+         if [[ $awkp != 0 ]]; then [[ "${rest[i]}" =~ $awkp ]] && { _hit "a file-changing command" "$r"; return 0; }; continue; fi
          if [[ "${rest[i]}" == -exec || "${rest[i]}" == -execdir || "${rest[i]}" == -ok || "${rest[i]}" == -okdir ]] && _text_tool "${rest[i+1]:-}"; then
            # find -exec grep 'git reset' {} +: grep's words are data
            while [[ $((i+1)) -lt ${#rest[@]} && "${rest[i+1]}" != ';' && "${rest[i+1]}" != '+' ]]; do i=$((i+1)); done

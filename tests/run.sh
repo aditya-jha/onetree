@@ -333,6 +333,12 @@ $ONETREE init --guard --root "$TMP/dv-worktrees" "$DV" >/dev/null 2>&1
 eq "park: a main with a commit the remote lacks is left with the code diverged, and the text names the count" \
   "$(ONETREE_NO_EVENTS=1 $ONETREE gc --json "$DV" | jq -c '.[] | select(.park) | .park | [.action, .code]') $(ONETREE_NO_EVENTS=1 $ONETREE park "$DV" 2>&1 | grep -cE '^park diverged: main has 1 commit\(s\) origin/main lacks, so it cannot fast-forward$')" '["leave","diverged"] 1'
 $ONETREE unregister "$DV" >/dev/null; chmod -R u+w "$DV"
+git clone -q origin.git untr 2>/dev/null; UT=$TMP/untr; git -C "$UT" reset -q --hard HEAD~1; mkdir "$UT/.idea"; echo x > "$UT/.idea/ws"
+$ONETREE init --guard --root "$TMP/ut-worktrees" "$UT" >/dev/null 2>&1
+out=$(ONETREE_NO_EVENTS=1 $ONETREE park "$UT" 2>&1) || true
+eq "park: a guarded main on its integration branch with only an untracked folder fast-forwards and keeps the folder (#40)" \
+  "$(grep -cE '^fast-forwarded untr main to [0-9a-f]{7}$' <<<"$out") $(git -C "$UT" rev-list --count HEAD..origin/main) $(cat "$UT/.idea/ws")" "1 0 x"
+$ONETREE unregister "$UT" >/dev/null; chmod -R u+w "$UT"
 
 # ---- park never overwrites an ignored file that the integration branch now tracks: git would, by default
 git init -q --bare -b main ig.git; git clone -q ig.git igmain 2>/dev/null; IG=$TMP/igmain

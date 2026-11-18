@@ -4029,8 +4029,9 @@ block() {
     own=$(bound_worktrees "${sid:-}" "$([[ "$apid" == null ]] || echo "$apid")" "$m" | awk 'NR == 1') || own=
     if [[ -n "$own" ]]; then where="This session already has a worktree, $own: do it there. To work there, $(move_hint "$h" "$own" "$m")"
     else where="For a task of your own: $(new_step "$h" "<slug>" "$r"), then $(move_hint "$h" "<path>" "$m")"; fi
-    printf 'onetree guard (%s): %s is in %s, the worktree another agent session works in (branch %s). Reading is fine; a change here would land in that session'"'"'s branch. %s Only if this session continues that session'"'"'s own work (a fork or side chat of it): %s makes the worktree yours too, then retry.\n' \
-      "${3:-a write}" "$1" "$2" "$b" "$where" "$(new_step "$h" "$(basename "$2")" "$r")" >&2
+    local at="$1 is in $2"; [[ "$1" == "$2" ]] && at=$2   # a command run in the worktree itself names its folder
+    printf 'onetree guard (%s): %s, the worktree another agent session works in (branch %s). Reading is fine; a change here would land in that session'"'"'s branch. %s Only if this session continues that session'"'"'s own work (a fork or side chat of it): %s makes the worktree yours too, then retry.\n' \
+      "${3:-a write}" "$at" "$b" "$where" "$(new_step "$h" "$(basename "$2")" "$r")" >&2
     exit 2
   fi
   # dsh's plugin sends the session's working directory as cwd: inside a worktree of this checkout, the session works there

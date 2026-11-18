@@ -16,10 +16,8 @@
         "root": "/Users/you/Documents/shop/.worktrees",
         "worktreeDir": "/Users/you/Documents/shop/.worktrees/shop-web",
         "branchPrefix": "feature/",
-        "copy": [
-          ".env",
-          ".env.local"
-        ],
+        "copy": [],
+        "worktreeInclude": true,
         "keep": [],
         "keepSource": "/Users/you/Documents/shop/shop-web",
         "bootstrap": null,
@@ -190,6 +188,7 @@
           ".env",
           ".env.local"
         ],
+        "worktreeInclude": false,
         "keep": [
           "inventory.private.yaml",
           "releases/production.env"
@@ -317,6 +316,7 @@
           ".env",
           ".env.local"
         ],
+        "worktreeInclude": false,
         "keep": [],
         "keepSource": "/Users/you/Documents/shop/shop-agent",
         "bootstrap": null,
@@ -467,6 +467,7 @@
           ".env",
           ".env.local"
         ],
+        "worktreeInclude": false,
         "keep": [],
         "keepSource": "/Users/you/Documents/shop/shop-research",
         "bootstrap": null,
@@ -544,6 +545,7 @@
           ".env",
           ".env.local"
         ],
+        "worktreeInclude": false,
         "keep": [],
         "keepSource": "/Users/you/Documents/Research/lab",
         "bootstrap": null,
@@ -618,6 +620,7 @@
         "worktreeDir": "/Users/you/worktrees/onetree",
         "branchPrefix": "feature/",
         "copy": [],
+        "worktreeInclude": false,
         "keep": [],
         "keepSource": "/Users/you/Documents/projects/onetree",
         "bootstrap": null,
@@ -857,6 +860,7 @@
           ".env",
           ".env.local"
         ],
+        "worktreeInclude": false,
         "keep": [],
         "keepSource": "/Users/you/Documents/projects/relay",
         "bootstrap": null,
@@ -958,6 +962,7 @@
           ".env",
           ".env.local"
         ],
+        "worktreeInclude": false,
         "keep": [],
         "keepSource": "/Users/you/Documents/projects/ledger",
         "bootstrap": null,

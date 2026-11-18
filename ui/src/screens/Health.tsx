@@ -169,7 +169,7 @@ export function Health({ snap, now, home, act }: ScreenProps) {
                       : []),
                     ["root", shorten(info.root, home)],
                     ["branchPrefix", info.branchPrefix],
-                    ["copy", info.copy.join(" ") || "(none)"],
+                    ["copy", [...(info.worktreeInclude ? [".worktreeinclude"] : []), ...info.copy].join(" ") || "(none)"],
                     ["keep", info.keep.join(" ") || "(none)"],
                     ["keepSource", shorten(info.keepSource, home)],
                     ...(info.writable ? ([["writable", writableText(info.writable.paths, info.lockIgnored), info.writable.source]] as [string, string, string][]) : []),

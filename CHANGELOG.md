@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- The shell wrappers load when `~/.zshrc` defines an alias named after an
+  agent before sourcing them, such as `alias codex='codex --search'`. zsh
+  expanded the alias inside `codex() {`, so the file stopped with a parse
+  error and `codex`, `pi` and `dsh` started without onetree. The alias now
+  calls the wrapper with its options. `onetree doctor` checks that the file
+  loads when an alias names an agent, in place of its check for `dsh()`.
+
 - `onetree new` and `onetree bootstrap` copy the gitignored files a repo's
   `.worktreeinclude` matches (`.gitignore` syntax), the file Claude Code copies
   from, so a repo keeps one list instead of repeating it in `onetree.copy`. With a `.worktreeinclude`, `copy`'s `.env .env.local` default

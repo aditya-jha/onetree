@@ -734,10 +734,12 @@ where the extension takes it back to the worktree.
 against the source checkout (and that one against its upstream, as of its last
 fetch), and the shell wrappers, the pi extension, the dsh plugin and each rules
 block against what this onetree writes. Any drift names `onetree update`.
-Where zsh is installed it also starts a new interactive zsh, as a terminal
-would, and fails unless `claude`, `codex`, `pi` and `dsh` there are onetree's
-wrappers: a function of the same name defined later in `~/.zshrc`, or a
-wrapper file that does not load, leaves an agent starting in the main checkout.
+Where zsh is installed it also sources the wrapper file in a zsh that reads
+no user config (`zsh -f`), with an alias named after each agent defined first,
+and fails unless `claude`, `codex`, `pi` and `dsh` are onetree's wrappers there.
+It never runs `~/.zshrc`, so it does not see a function of the same name that
+a later line of `~/.zshrc` defines over a wrapper; such a function starts that
+agent without onetree.
 
 ## Machine-readable output
 

@@ -83,9 +83,8 @@
   agent before sourcing them, such as `alias codex='codex --search'`. zsh
   expanded the alias inside `codex() {`, so the file stopped with a parse
   error and `codex`, `pi` and `dsh` started without onetree. The alias now
-  calls the wrapper with its options. `onetree doctor` starts a new zsh and
-  fails unless all four agents are onetree's wrappers there; it used to check
-  only that `~/.zshrc` mentions the file.
+  calls the wrapper with its options. `onetree doctor` checks that the file
+  loads when an alias names an agent, in place of its check for `dsh()`.
 
 ## 1.2.0 (2026-11-18)
 

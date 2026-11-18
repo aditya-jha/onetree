@@ -3668,11 +3668,13 @@ cmd_doctor() {
   [[ -d "$HOME/.copilot" ]] && chk "Copilot hooks point at $BIN" "grep -q '$BIN guard' $COPILOT_HOOKS && grep -q '$BIN session' $COPILOT_HOOKS"
   [[ -d "$HOME/.copilot" ]] && chk "rules block in ~/.copilot/copilot-instructions.md" "grep -qF '$START' $HOME/.copilot/copilot-instructions.md"
   [[ -d "$HOME/.dsh" ]] && chk "dsh plugin calls $BIN and ~/.dsh/cordis.patch.yml loads it" "grep -qF '$BIN' $HOME/.dsh/onetree-plugin.mjs && grep -qF '$YSTART' $HOME/.dsh/cordis.patch.yml"
-  # load ~/.zshrc as a new terminal would: an alias or function defined there can break or replace a wrapper the file holds
-  command -v zsh >/dev/null && chk "shell wrappers load in a new zsh: claude, codex, pi and dsh are onetree's" \
-    "[[ \$(bounded 10 zsh -ic 'declare -f claude codex pi dsh' </dev/null 2>/dev/null | grep -c onetree_launch) -ge 4 ]]"
+  chk "shell wrappers sourced" "grep -q onetree-agents.sh $HOME/.zshrc"
   chk "shell wrappers fail closed" "grep -q 'refusing to start' $HOME/.onetree-agents.sh"
   chk "shell wrappers pin $BIN" "grep -qF '$BIN' $HOME/.onetree-agents.sh"
+  # an alias named after an agent, sourced before the file, is what used to break it. zsh -f reads none of the user's config,
+  # so the dashboard's cached doctor never runs ~/.zshrc
+  command -v zsh >/dev/null && chk "shell wrappers load when an alias names an agent" \
+    "zsh -fc 'alias claude=: codex=: pi=: dsh=:; source \"\$1\" && [ \"\$(declare -f claude codex pi dsh | grep -c onetree_launch)\" -ge 4 ]' _ '$WRAPPERS' </dev/null >/dev/null 2>&1"
   # what install wrote, against what this onetree and its source would write now
   local src f; src=$(gcfg onetree.source || true)
   [[ -n "$src" && -f "$src/bin/onetree" ]] && chk "installed onetree is the one in $src (if not: onetree update)" "cmp -s '$BIN' '$src/bin/onetree'"

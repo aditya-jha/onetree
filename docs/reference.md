@@ -522,7 +522,9 @@ such record. Claude's own
 `--worktree`, `--continue` and `--resume` pass through. The wrapper functions'
 names start with a letter (`onetree_launch`, `onetree_claude_passthrough`, …):
 Claude Code snapshots a shell's functions for its agents but drops variables
-and names starting with one underscore.
+and names starting with one underscore. The agents' wrappers are defined with
+the `function` keyword, so an alias of the same name sourced before them
+(`alias codex='codex --search'`) keeps working and calls the wrapper.
 
 `onetree launch [--task <slug>] <agent> [args…]` is what anything else that
 starts agents (fish, a script, a process supervisor) calls. In a guarded mirror
@@ -637,6 +639,10 @@ where the extension takes it back to the worktree.
 against the source checkout (and that one against its upstream, as of its last
 fetch), and the shell wrappers, the pi extension, the dsh plugin and each rules
 block against what this onetree writes. Any drift names `onetree update`.
+Where zsh is installed it also starts a new interactive zsh, as a terminal
+would, and fails unless `claude`, `codex`, `pi` and `dsh` there are onetree's
+wrappers: a function of the same name defined later in `~/.zshrc`, or a
+wrapper file that does not load, leaves an agent starting in the main checkout.
 
 ## Machine-readable output
 

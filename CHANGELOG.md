@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.2.0 (2026-11-18)
+
 - `onetree park` (and so `gc` and `update`) fast-forwards a guarded main on its
   integration branch that holds untracked files, such as an IDE's `.idea/`. It
   used to call them uncommitted changes and leave main behind, so a guarded

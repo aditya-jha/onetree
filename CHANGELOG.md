@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- An agent session can no longer change another session's worktree. The
+  sessions that made or asked for a worktree (`onetree new`, `carry`,
+  `launch`) are recorded as its owners; for any other session the guard
+  treats it like a guarded main (reading passes, writes are refused with how
+  to make its own worktree), and the session-start hint says so when a session
+  opens there, as the Claude app's **+** does after a session moved into a
+  worktree. A fork or side chat continuing the work runs `onetree new <slug>`
+  to join. gc records owners for existing worktrees from their `new` events.
+
 - `onetree new` and `onetree bootstrap` copy the gitignored files a repo's
   `.worktreeinclude` matches (`.gitignore` syntax), the file Claude Code copies
   from, so a repo keeps one list instead of repeating it in `onetree.copy`. With a `.worktreeinclude`, `copy`'s `.env .env.local` default

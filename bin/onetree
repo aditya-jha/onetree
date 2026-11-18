@@ -634,9 +634,56 @@ switch_int() {
 listed_worktree() {
   local w; while IFS= read -r w; do [[ -n "$w" && "$(real "$w")" == "$2" ]] && return 0; done < <(worktrees_of "$1"); return 1
 }
+# ---- worktree owners: the agent sessions a worktree belongs to (onetree new, carry, launch), one per line of its git
+# dir's onetree-owners: session<TAB>pid<TAB>pid start. In the guard (OWNERS_CHECK=1) a worktree with owners, none of them
+# the caller, is judged like a guarded main: read-only to that caller. One without the file is anyone's
+OWNERS_CHECK=0; CALLER_PID=; CALLER_START=-
+owners_file() { local gd; gd=$(_git_dir "$1" 2>/dev/null) && printf '%s/onetree-owners\n' "$gd"; }
+own_tree() {  # path session pid start — add an owner, once; never fails. - for an empty field: read joins empty tab fields
+  local f l; [[ -n "$2$3" ]] || return 0; f=$(owners_file "$1") || return 0; l="${2:--}"$'\t'"${3:--}"$'\t'"${4:--}"
+  grep -qxF "$l" "$f" 2>/dev/null || printf '%s\n' "$l" >> "$f" 2>/dev/null || true
+}
+# owners file — 0 when the calling session owns it: by any session id it is known by (hook payload or environment, since
+# hosts disagree on which is which), or by its process. Nothing to know the caller by: 0, as before owners existed
+caller_owns() {
+  local s p st ids=" ${sid:-} ${CLAUDE_CODE_SESSION_ID:-} ${CODEX_THREAD_ID:-} ${ONETREE_SESSION_ID:-} ${DSH_SESSION_ID:-} "
+  while IFS=$'\t' read -r s p st; do [[ "$s" != - && "$ids" == *" $s "* ]] && return 0; done < "$1"
+  # by process only when no id matched: ps is the slow part, and a guard call may ask from several subshells
+  if [[ "$CALLER_START" == - ]]; then
+    CALLER_PID=${ONETREE_SESSION_PID:-$(agent_pid)}; CALLER_START=
+    [[ "$CALLER_PID" =~ ^[0-9]+$ ]] && CALLER_START=$(ps -o lstart= -p "$CALLER_PID" 2>/dev/null | tr -s ' ' || true)
+  fi
+  while IFS=$'\t' read -r s p st; do
+    [[ -n "$CALLER_START" && "$p" == "$CALLER_PID" && "$st" == "$CALLER_START" ]] && return 0
+  done < "$1"
+  [[ -z "${ids// /}" && -z "$CALLER_START" ]]
+}
+foreign_tree_of() {  # real path — the worktree it lies in, when that worktree has owners and the caller is none of them
+  local d=$1 g
+  while [[ -n "$d" && "$d" != / ]]; do
+    if [[ -e "$d/.git" ]]; then
+      [[ -f "$d/.git" ]] && IFS= read -r g < "$d/.git" || return 1   # a .git folder: a main checkout
+      g=${g#gitdir: }; [[ "$g" == /* ]] || g="$d/$g"
+      [[ -s "$g/onetree-owners" ]] && ! caller_owns "$g/onetree-owners" && { echo "$d"; return 0; }
+      return 1
+    fi
+    d=$(dirname "$d")
+  done
+  return 1
+}
+# worktree — once, for one made before owners were recorded: the agent sessions its `new` events name (an empty file
+# when none: anyone's, and not looked up again)
+owners_backfill() {
+  local f s p st; f=$(owners_file "$1") || return 0; [[ -e "$f" ]] && return 0
+  [[ -f "$EVENTS" ]] && grep -F "\"path\":$(jq -n --arg p "$1" '$p')" "$EVENTS" 2>/dev/null | grep -F '"kind":"new"' |
+    jq -r 'select((.subagent // "") == "") | [(.session // "-" | if . == "" then "-" else . end), ((.pid // "-") | tostring), (.pidStart // "-" | if . == "" then "-" else . end)] | @tsv' 2>/dev/null |
+    while IFS=$'\t' read -r s p st; do own_tree "$1" "${s#-}" "${p#-}" "${st#-}"; done || true
+  [[ -e "$f" ]] || { : > "$f"; } 2>/dev/null || true
+}
 guarded_main_of_path() {
   local p d m
   if [[ -d "$1" ]]; then p=$(real "$1"); else p=$(real "$(dirname "$1")")/$(basename "$1"); fi
+  [[ $OWNERS_CHECK == 1 ]] && d=$(foreign_tree_of "$p") && { echo "$d"; return 0; }
   while IFS= read -r m; do
     [[ -n "$m" ]] || continue
     [[ "$p" == "$m" || "$p" == "$m"/* ]] || continue
@@ -1481,6 +1528,8 @@ cmd_new() {
     git -C "$main" worktree list --porcelain | grep -qx "worktree $path" || die "$path exists but is not a worktree of $repo"
     if ! bootstrap "$main" "$path"; then die "bootstrap failed in $path (worktree kept; retry the same slug)"; fi
     mark_ours "$path"; claude_trust_worktree "$main" "$path"
+    # a second agent session asking for this worktree joins its owners: a fork or side chat continuing its work
+    [[ -n "$h" ]] && own_tree "$path" "$SKEY_SESSION" "$SKEY_PID" "$SKEY_START"
     [[ -n "$h" ]] && log_event new "path=$path" "repo=$repo" "branch=$branch" "reused:=true" "agent=${h%%-*}" "host=$h" "session=$SKEY_SESSION" "pid:=${SKEY_PID:-null}" "pidStart=$SKEY_START" ${SUBAGENT:+"subagent=$SUBAGENT"}
     echo "$path"; [[ "$ONETREE_CMD" == new ]] && next_step "$path" "$main"; return 0
   fi
@@ -1520,6 +1569,7 @@ cmd_new() {
     die "bootstrap failed; rolled back new worktree $path"
   fi
   tmark "new: bootstrap"; mark_ours "$path"; claude_trust_worktree "$main" "$path"
+  [[ -n "$h" ]] && own_tree "$path" "$SKEY_SESSION" "$SKEY_PID" "$SKEY_START"
   log_event new "path=$path" "repo=$repo" "branch=$branch" "seconds:=$SECONDS" "resumed:=$([[ $created_branch == 1 ]] && echo false || echo true)" \
     "agent=${h%%-*}" "host=$h" "session=$SKEY_SESSION" "pid:=${SKEY_PID:-null}" "pidStart=$SKEY_START" ${SUBAGENT:+"subagent=$SUBAGENT"}
   echo "$path"; [[ "$ONETREE_CMD" == new ]] && next_step "$path" "$main"
@@ -1708,6 +1758,7 @@ remove_one() {
   fi
   if [[ $force == 0 ]]; then   # each keep has a stable code (docs/snapshot.md) and the reason gc has always logged
     local owner; [[ $explicit == 0 ]] && owner=$(foreign_owner "$main" "$path") && { gc_out keep foreign "made by $owner, which removes it itself"; return 1; }
+    owners_backfill "$path"
     [[ "$lock" != - ]]      && { gc_out keep locked "$lock"; return 1; }
     [[ "$live" != 0 ]]      && { gc_out keep live "$live live process(es) or dsh session(s) inside"; return 1; }
     [[ "$dirty" != 0 ]]     && { gc_out keep dirty "$dirty uncommitted path(s)"; return 1; }
@@ -2084,6 +2135,8 @@ cmd_launch() {
     # inside it (#52)
     [[ "$agent" == claude ]] && claude_trust_root "$PWD"
   fi
+  # exec keeps this pid: the agent it becomes owns the worktree, before it knows its own session id
+  own_tree "$p" "" "$$" "$(ps -o lstart= -p "$$" 2>/dev/null | tr -s ' ' || true)"
   printf 'onetree: %s runs in %s\n' "$agent" "$p" >&2
   if [[ "$agent" == codex ]]; then   # its sandbox's grants and git settings (codex_grants)
     while IFS= read -r x; do pre+=("$x"); done < <(codex_grants "$p")
@@ -2372,7 +2425,7 @@ session_noninteractive() {
 # ---- session: the SessionStart hook, and the rules block each agent's instructions carry
 # SessionStart hook: records the session; quiets non-interactive onboarding, never registered-repo safety guidance
 cmd_session() {
-  local j="" main r reg=no
+  local j="" main r t reg=no
   [[ -t 0 ]] || j=$(cat 2>/dev/null || true)
   [[ -z "$j" ]] || record_session "$j"
   main=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || { session_noninteractive || true; exit 0; }; main=$(real "$(dirname "$main")")
@@ -2384,6 +2437,12 @@ cmd_session() {
   elif [[ $reg == no ]]; then
     session_noninteractive && exit 0
     printf 'onetree: %s is not set up for worktrees. Before creating any branch or worktree, ask the user once whether to onboard it (`onetree init --guard` makes this checkout a read-only mirror and routes every task through `onetree new <slug>`; `onetree init --no-guard` only registers it for `onetree gc`; skipping is fine). Run `onetree info` after onboarding.\n' "$(basename "$main")"
+  elif t=$(sid=$(jq -r '.session_id // empty' <<<"$j" 2>/dev/null); foreign_tree_of "$(real "$PWD")"); then
+    # opened in another agent session's worktree (the app's + reuses the folder its last session worked in)
+    local h b; h=$(host_of); case "$(jq -r '.agent // empty' <<<"$j" 2>/dev/null)" in pi|dsh) h=$(jq -r .agent <<<"$j") ;; esac
+    b=$(git -C "$t" symbolic-ref -q --short HEAD 2>/dev/null || echo "(detached)")
+    printf 'onetree: this session starts in %s, the worktree another agent session works in (branch %s). Reading is fine. Before the first edit, git mutation, script, server or test run: for a task of your own, %s, then %s Only if this session continues that session'"'"'s own work (a fork or side chat of it), %s makes the worktree yours too. `onetree info` prints the rules.\n' \
+      "$t" "$b" "$(new_step "$h" "<slug>" "$(basename "$main")")" "$(move_hint "$h" "<path>" "$main")" "$(new_step "$h" "$(basename "$t")")"
   elif r=$(guarded_main_of_path "$PWD"); then
     local wr note; wr=$(wr_entries "$r" 2>/dev/null | tr '\n' ' ' || true); wr=${wr% }
     if lock_ignored "$r"; then note=$([[ -n "$wr" ]] && printf ' Local state that belongs to this checkout stays writable here, without a worktree: %s (a file entry takes in-place writes only).' "$wr")
@@ -3964,6 +4023,16 @@ block() {
   # Claude sets agent_id only on a subagent's calls
   h=$(host_of) || h=; [[ -n "${aid:-}" && "$h" == claude-* ]] && h=claude-subagent
   case "${agent:-}" in pi|dsh) h=$agent ;; esac   # its extension or plugin says who is asking: no guess from the process
+  if [[ -f "$2/.git" ]]; then   # a worktree another agent session owns (foreign_tree_of), not a guarded main
+    local m b; m=$(git -C "$2" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) && m=$(real "$(dirname "$m")") || m=$2
+    r=$(basename "$m"); b=$(git -C "$2" symbolic-ref -q --short HEAD 2>/dev/null || echo "(detached)")
+    own=$(bound_worktrees "${sid:-}" "$([[ "$apid" == null ]] || echo "$apid")" "$m" | awk 'NR == 1') || own=
+    if [[ -n "$own" ]]; then where="This session already has a worktree, $own: do it there. To work there, $(move_hint "$h" "$own" "$m")"
+    else where="For a task of your own: $(new_step "$h" "<slug>" "$r"), then $(move_hint "$h" "<path>" "$m")"; fi
+    printf 'onetree guard (%s): %s is in %s, the worktree another agent session works in (branch %s). Reading is fine; a change here would land in that session'"'"'s branch. %s Only if this session continues that session'"'"'s own work (a fork or side chat of it): %s makes the worktree yours too, then retry.\n' \
+      "${3:-a write}" "$1" "$2" "$b" "$where" "$(new_step "$h" "$(basename "$2")" "$r")" >&2
+    exit 2
+  fi
   # dsh's plugin sends the session's working directory as cwd: inside a worktree of this checkout, the session works there
   own=; [[ "$h" != dsh ]] || own=$(worktree_at "${scwd:-}" "$2") || own=
   if [[ -n "$own" ]]; then h=dsh-moved; else own=$(bound_worktrees "${sid:-}" "$([[ "$apid" == null ]] || echo "$apid")" "$2" | awk 'NR == 1') || own=; fi
@@ -4037,6 +4106,7 @@ cmd_guard() {
   { IFS= read -r -d '' tool; IFS= read -r -d '' cwd; IFS= read -r -d '' sid; IFS= read -r -d '' agent; IFS= read -r -d '' cmd; IFS= read -r -d '' d; IFS= read -r -d '' aid; } \
     < <(jq -j '[.tool_name, .cwd, .session_id, '"$AGENT_JQ"', (.tool_input.command // .tool_input.cmd), .tool_input.workdir, .agent_id] | map((. // "" | tostring) + "\u0000") | add' <<<"$j" 2>/dev/null) || true
   [[ -n "$tool" ]] || exit 0   # one jq start per call, every field at once; bad JSON still passes
+  OWNERS_CHECK=1   # another agent session's worktree is read-only here, like a guarded main
   GUARDED_MEMO=$(gcfg_all onetree.guarded)
   [[ -n "$cwd" ]] || cwd=$PWD
   scwd=$cwd   # the session's own directory, whatever workdir a call names

@@ -1051,6 +1051,26 @@ CLAUDE_CODE_SESSION_ID=s-fork ONETREE_SESSION_PID=$HY ONETREE_HOST=claude-cli $O
 eq "owners: the session that made a worktree may change it (Claude by session id, pi by its process, the Codex app by thread id from the payload or its environment, dsh by session id), another session may not, a session that ran onetree new on it joins, and one made by no agent session is anyone's" \
   "$(owned s-bind "$HC" claude "$b2") $(owned s-other $$ claude "$b2") $(owned s-fork $$ claude "$b2") | $(owned "" "$HP" pi "$bp") $(owned "" $$ pi "$bp") | $(owned t-app "$HX" codex "$bx") $(owned x "$HX" codex "$bx" t-app) $(owned t-other "$HX" codex "$bx") | $(owned s-dsh-bind "" dsh "$bd") $(owned s-dsh-other "" dsh "$bd") | $(owned s-other $$ claude "$aw")" \
   "allow block allow | allow block | allow allow block | allow block | allow"
+join_owner() {
+  ONETREE_HOST=pi ONETREE_SESSION_ID=$1 ONETREE_SESSION_PID=$2 $ONETREE new bind-owners "$CW" 2>/dev/null
+}
+bo=$(join_owner ask-a "$HC")
+owners=$(git -C "$bo" rev-parse --path-format=absolute --git-dir)/onetree-owners
+owner_row() { printf '%s\t%s\t%s\n' "$1" "$2" "$(ps -o lstart= -p "$2" | tr -s ' ')"; }
+{ owner_row ask-a "$HC"; owner_row ask-a "$HY"; owner_row ask-b "$HC"; owner_row ask-b "$HY"; owner_row - "$HP"; } > "$owners"
+eq "owners: a legacy session row requires its ID even if the caller has its live PID" \
+  "$(owned ask-a "$HY" pi "$bo") $(owned ask-unknown "$HC" pi "$bo") $(owned "" "$HC" pi "$bo")" "allow block block"
+join_owner ask-a "$HY" >/dev/null
+join_owner ask-a "$HX" >/dev/null
+eq "owners: rejoining after a restart compacts all session IDs and preserves process-only owners" \
+  "$(cat "$owners")" "$(printf '%s\n' $'ask-a\t-\t-' $'ask-b\t-\t-'; owner_row - "$HP")"
+eq "owners: compaction retains access by ID and by a process-only row" \
+  "$(owned ask-a "$HX" pi "$bo") $(owned ask-b "$HX" pi "$bo") $(owned "" "$HP" pi "$bo")" "allow allow allow"
+join_owner ask-c "$HX" >/dev/null & oc=$!
+join_owner ask-d "$HY" >/dev/null & od=$!
+wait "$oc" "$od"
+eq "owners: simultaneous joins retain both new owners" \
+  "$(cut -f1 "$owners" | LC_ALL=C sort | paste -sd ' ' -)" "- ask-a ask-b ask-c ask-d"
 fo=$({ jq -nc --arg cwd "$b2" '{tool_name: "Bash", cwd: $cwd, session_id: "s-other", tool_input: {command: "git commit -qm x"}}' | env -u CLAUDE_CODE_SESSION_ID ONETREE_SESSION_PID=$$ ONETREE_HOST=claude-app ONETREE_NO_EVENTS=1 $ONETREE guard >/dev/null; } 2>&1 || true)
 fh=$(cd "$b2" && jq -nc '{session_id: "s-other"}' | env -u CLAUDE_CODE_SESSION_ID ONETREE_SESSION_PID=$$ ONETREE_HOST=claude-app $ONETREE session)
 eq "owners: in another session's worktree a git write is refused and so is reading it out as the main checkout's; the refusal and the session-start hint say how to make one's own worktree and how a fork joins" \

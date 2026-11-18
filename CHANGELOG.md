@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Worktree ownership keeps one row per session ID across restarts. The next
+  owner registration compacts older duplicates. Only owners without a session
+  ID are matched by process (#55).
+
 - Session startup reports when a task worktree is behind its integration
   branch. Run onetree sync for incoming paths and a safe fast-forward.
   Behind notices and sync results appear in onetree events (#53).

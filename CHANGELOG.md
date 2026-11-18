@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- `onetree park` (and so `gc` and `update`) fast-forwards a guarded main on its
+  integration branch that holds untracked files, such as an IDE's `.idea/`. It
+  used to call them uncommitted changes and leave main behind, so a guarded
+  onetree source with one never updated (#40). Switching a main back to its
+  integration branch still waits for a clean checkout.
+
 - pi: when the worktree a session made is gone (gc removed it after its PR
   merged), the next bash, write or edit call is refused with a reason naming
   it, instead of quietly running in the folder the session started in. A

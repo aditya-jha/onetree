@@ -1754,17 +1754,19 @@ _park_body() {  # main — git mutations; caller holds the unlock window when gu
   local main=$1 repo int branch pr prhead head merged=0 ghmerged=0 before after
   repo=$(basename "$main"); int=$(integration "$main"); remotes_resolve "$main"
   branch=$(git -C "$main" symbolic-ref -q --short HEAD || echo "(detached)")
+  # on the integration branch untracked files may stay: a fast-forward that would overwrite one is refused by git
+  local uno=(); [[ "$branch" == "$int" ]] && uno=(-uno)
   if [[ "${2:-0}" == 1 ]]; then
     apply_half_switch_repair "$main"
     branch=$(git -C "$main" symbolic-ref -q --short HEAD || echo "(detached)")
-  elif [[ -n "$(git -C "$main" status --porcelain)" ]]; then
+  elif [[ -n "$(git -C "$main" status --porcelain ${uno[@]+"${uno[@]}"})" ]]; then
     park_out "$main" leave dirty "on $branch with uncommitted changes, leaving it"
     return 1
   fi
   if [[ "$branch" == "$int" ]]; then
     git -C "$main" fetch -q "$RB" 2>/dev/null || true
     before=$(git -C "$main" rev-parse HEAD); after=$before; local err=""
-    if [[ -z "$(git -C "$main" status --porcelain)" ]] && err=$(git -C "$main" merge -q --ff-only --no-overwrite-ignore "$RB/$int" 2>&1); then after=$(git -C "$main" rev-parse HEAD)
+    if [[ -z "$(git -C "$main" status --porcelain -uno)" ]] && err=$(git -C "$main" merge -q --ff-only --no-overwrite-ignore "$RB/$int" 2>&1); then after=$(git -C "$main" rev-parse HEAD)
     # an ignored file of the user's is where the update puts a tracked one: keep the user's
     elif [[ "$err" == *"would be overwritten"* ]]; then
       park_out "$main" leave blocked "fast-forwarding $int $(git_refusal "$err")"; return 1

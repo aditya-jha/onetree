@@ -257,7 +257,9 @@ staged version differs from both `HEAD` and the working copy stops the carry
 before it starts, because only one of the two would reach the worktree: stage
 all of it or unstage it first.
 
-gc leaves a dirty guarded main alone. `park` never overwrites a gitignored
+gc leaves a dirty guarded main alone. On its integration branch, untracked
+files do not make main dirty: park fast-forwards around them, and git refuses
+a fast-forward that would overwrite one (code `blocked`). `park` never overwrites a gitignored
 file in the main checkout: when switching to the integration branch, or
 fast-forwarding it, would replace one with a file that branch now tracks, park
 leaves main where it is and names the file (code `blocked`).

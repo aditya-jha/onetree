@@ -1042,10 +1042,24 @@ eq "dsh: the session hint and a refusal go by the working directory the plugin s
 gt=$({ jq -nc --arg cwd "$CW" '{tool_name: "Bash", cwd: $cwd, session_id: "s-dsh-none", agent: "dsh", tool_input: {command: "git stash"}}' | ONETREE_NO_EVENTS=1 $ONETREE guard >/dev/null; } 2>&1 || true)
 eq "dsh: a refusal for a session with no worktree says to call the onetree_new tool (dsh's sandbox cannot run onetree new), then pass workdir" \
   "$(grep -c 'Work in a worktree instead: call the `onetree_new` tool with slug <slug>: .*, then pass `workdir` <path> to every bash call' <<<"$gt")" "1"
+# owners: a worktree is read-only to every agent session but the ones that made it or asked for it (onetree new)
+owned() {  # session pid agent worktree — the guard's verdict on an edit there; caller ids only from the payload and pid
+  if jq -nc --arg fp "$4/README.md" --arg cwd "$4" --arg s "$1" --arg a "$3" '{tool_name: "Edit", cwd: $cwd, session_id: $s, agent: $a, tool_input: {file_path: $fp}}' |
+    env -u CLAUDE_CODE_SESSION_ID -u CODEX_THREAD_ID -u ONETREE_SESSION_ID -u DSH_SESSION_ID ONETREE_SESSION_PID=$2 ONETREE_NO_EVENTS=1 ${5:+CODEX_THREAD_ID=$5} $ONETREE guard >/dev/null 2>&1; then echo allow; else echo block; fi
+}
+CLAUDE_CODE_SESSION_ID=s-fork ONETREE_SESSION_PID=$HY ONETREE_HOST=claude-cli $ONETREE new bind-2 "$CW" >/dev/null 2>&1   # a fork joins the session it continues
+eq "owners: the session that made a worktree may change it (Claude by session id, pi by its process, the Codex app by thread id from the payload or its environment, dsh by session id), another session may not, a session that ran onetree new on it joins, and one made by no agent session is anyone's" \
+  "$(owned s-bind "$HC" claude "$b2") $(owned s-other $$ claude "$b2") $(owned s-fork $$ claude "$b2") | $(owned "" "$HP" pi "$bp") $(owned "" $$ pi "$bp") | $(owned t-app "$HX" codex "$bx") $(owned x "$HX" codex "$bx" t-app) $(owned t-other "$HX" codex "$bx") | $(owned s-dsh-bind "" dsh "$bd") $(owned s-dsh-other "" dsh "$bd") | $(owned s-other $$ claude "$aw")" \
+  "allow block allow | allow block | allow allow block | allow block | allow"
+fo=$({ jq -nc --arg cwd "$b2" '{tool_name: "Bash", cwd: $cwd, session_id: "s-other", tool_input: {command: "git commit -qm x"}}' | env -u CLAUDE_CODE_SESSION_ID ONETREE_SESSION_PID=$$ ONETREE_HOST=claude-app ONETREE_NO_EVENTS=1 $ONETREE guard >/dev/null; } 2>&1 || true)
+fh=$(cd "$b2" && jq -nc '{session_id: "s-other"}' | env -u CLAUDE_CODE_SESSION_ID ONETREE_SESSION_PID=$$ ONETREE_HOST=claude-app $ONETREE session)
+eq "owners: in another session's worktree a git write is refused and so is reading it out as the main checkout's; the refusal and the session-start hint say how to make one's own worktree and how a fork joins" \
+  "$(grep -c "is in $b2, the worktree another agent session works in (branch feature/bind-2).*run \`onetree new <slug> cw-main\`, then call \`change_directory\`.*run \`onetree new bind-2 cw-main\` makes the worktree yours too" <<<"$fo") $(grep -c 'read-only main checkout' <<<"$fo") $(grep -c "this session starts in $b2, the worktree another agent session works in.*run \`onetree new bind-2\` makes the worktree yours too" <<<"$fh")" "1 0 1"
 kill $HC $HX $HY $HP $HD 2>/dev/null; wait $HC $HX $HY $HP $HD 2>/dev/null || true
 eq "session hint and rules: each host is told its own way in" \
   "$(cd "$CW" && ONETREE_HOST=claude-app $ONETREE session </dev/null | grep -c 'call `change_directory` with <path>') $(cd "$CW" && ONETREE_HOST=codex-cli $ONETREE session </dev/null | grep -c 'type `/cd <path>`') $($ONETREE rules | grep -cE '`change_directory` with the path|`/cd <worktree>`') $($ONETREE snippet "$CW" | grep -c 'Claude desktop app: call `change_directory`')" "1 1 2 1"
 ln -s "$b1" "$TMP/b1-link"
+ONETREE_HOST=claude-cli $ONETREE new bind-1 "$CW" >/dev/null 2>&1   # the guard calls below come from this shell's pid: it works in bind-1 too
 guard_table "guard: from the mirror, apply_patch with absolute worktree paths and commands with a workdir in the worktree pass; mirror paths, a patch naming no file, and a workdir in the mirror are refused" "$CW" \
   allow "Patch:*** Begin Patch\n*** Update File: $b1/README.md\n@@\n-hi\n+ho\n*** End Patch\n" \
   block "Patch:*** Begin Patch\n*** Update File: README.md\n@@\n-hi\n+ho\n*** End Patch\n" \
@@ -1167,6 +1181,9 @@ json_is "launch: in a guarded mirror an agent starts in a fresh worktree onetree
    and .et["'"$CW"'"].hasTrustDialogAccepted and .et["'"$TMP"'/cw-worktrees/cw-main"].hasTrustDialogAccepted
    and (.et | del(.["'"$CW"'"], .["'"$TMP"'/cw-worktrees/cw-main"]) | keys | all(startswith("'"$TMP"'/cw-worktrees/cw-main/claude-")))
    and (.f.cwd | startswith("'"$TMP"'/cw-worktrees/cw-main/claude-")) and .f.argv == ["hi"] and .ft == null'
+mkdir -p "$TMP/lbin-own"; printf '#!/bin/sh\necho "$$"; cat "$(git rev-parse --git-dir)/onetree-owners"\n' > "$TMP/lbin-own/pi"; chmod +x "$TMP/lbin-own/pi"
+lo=$(cd "$CW" && PATH="$TMP/lbin-own:$PATH" $ONETREE launch --task own-1 pi 2>/dev/null || true)
+eq "launch: the agent it starts owns the worktree, by the process it becomes (no session id yet)" "$(awk -F'\t' 'NR == 1 { p = $0 } NR == 2 { print ($1 == "-" && $2 == p) }' <<<"$lo")" "1"
 jq -n --arg p "$CW" '{projects: {($p): {hasTrustDialogAccepted: true}}, numStartups: 7}' > "$HOME/.claude.json"
 tw=$($ONETREE new trust-wt "$CW" 2>/dev/null); tn=$($ONETREE new trust-no "$MAIN" 2>/dev/null)
 eq "new: a worktree of a checkout Claude trusts is recorded as trusted by its own path (the desktop app moves a session there without asking), the rest of Claude's file is kept, and a checkout Claude does not trust gets no record" \
@@ -1190,6 +1207,10 @@ json_is "gc: worktrees the Codex app, the Claude app or another tool made are ke
 st=0; $ONETREE rm elsewhere "$CW" >/dev/null 2>&1 || st=$?
 eq "gc: the legacy worktree now carries onetree's marker, and onetree rm still removes a foreign one when asked" \
   "$([[ -f "$(git -C "$TMP/cw-worktrees/cw-main/legacy" rev-parse --path-format=absolute --git-dir)/onetree" ]] && echo marked) $st $([[ -d "$TMP/elsewhere" ]] && echo kept || echo gone)" "marked 0 gone"
+bf=$(CLAUDE_CODE_SESSION_ID=s-old ONETREE_HOST=claude-cli $ONETREE new owners-old "$CW" 2>/dev/null); rm -f "$(git -C "$bf" rev-parse --path-format=absolute --git-dir)/onetree-owners"
+$ONETREE gc --dry-run "$CW" >/dev/null 2>&1 || true
+eq "gc: a worktree made before owners were recorded gets them from its new events; one no event names gets an empty list (anyone's)" \
+  "$(cut -f1 "$(git -C "$bf" rev-parse --path-format=absolute --git-dir)/onetree-owners") $(wc -c < "$(git -C "$TMP/cw-worktrees/cw-main/legacy" rev-parse --path-format=absolute --git-dir)/onetree-owners" | tr -d ' ')" "s-old 0"
 
 # ---- resume: the sessions that made a repo's worktrees, and the way back to one after gc removed it
 rp=$(CLAUDE_CODE_SESSION_ID=s-res ONETREE_HOST=claude-cli $ONETREE new res-a "$CW" 2>/dev/null)

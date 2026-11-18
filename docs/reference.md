@@ -388,6 +388,22 @@ pass, also after `find -exec`; `gh pr checkout` and `gh repo sync` are writes.
 An `awk` program is read as awk, not as a command line: a comparison
 (`'$1>2'`) passes; `print > file`, a `|` pipe and `system()` are writes.
 
+**Another agent session's worktree is read-only too.** A worktree belongs to
+the agent sessions that made it or asked for it: `onetree new`, `carry` and
+`launch` record each in an `onetree-owners` file in the worktree's git folder
+(by session id, and by process for pi and for an agent `launch` starts). For
+any other session the guard judges that worktree like a guarded main: reading
+passes; edits, git writes, scripts and tests are refused, with the way to make
+its own worktree. A session that continues the owner's work (a fork, a side
+chat) runs `onetree new <that slug>` and joins its owners. The session-start
+hint says the same when a session opens there, as the Claude app's **+** does
+when a group's newest session worked in a worktree. A session is matched by any
+id it is known by (the hook's `session_id`, `CLAUDE_CODE_SESSION_ID`,
+`CODEX_THREAD_ID`, `ONETREE_SESSION_ID`, `DSH_SESSION_ID`) or its process; a
+caller with neither passes. A worktree with no owners file (made by hand, or by
+a person) is anyone's; gc fills the file for an older worktree from its `new`
+events.
+
 **It can't be switched off by an agent**, from any directory. It refuses
 `onetree uninstall` while any repo is guarded, `onetree unregister` of a
 guarded repo, and an `onetree init` on one whose last `--guard`/`--no-guard`

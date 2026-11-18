@@ -10,6 +10,12 @@
   fails unless all four agents are onetree's wrappers there; it used to check
   only that `~/.zshrc` mentions the file.
 
+- `onetree new` and `onetree bootstrap` copy the gitignored files a repo's
+  `.worktreeinclude` matches (`.gitignore` syntax), the file Claude Code copies
+  from, so a repo keeps one list instead of repeating it in `onetree.copy`. With a `.worktreeinclude`, `copy`'s `.env .env.local` default
+  no longer applies; entries you set still do. `onetree info` shows it on the
+  `copy` line.
+
 ## 1.2.0 (2026-11-18)
 
 - `onetree park` (and so `gc` and `update`) fast-forwards a guarded main on its

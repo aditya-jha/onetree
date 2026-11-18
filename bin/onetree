@@ -39,7 +39,7 @@
 #   gc [repo|--all] [--dry-run] [--json] [--fresh]
 #                              remove each worktree onetree made that is merged, clean and idle, and park merged mains
 #   park [repo|--all]          return a clean main whose branch merged to the integration branch; refresh its npm deps
-#   bootstrap [path]           copy onetree.copy files, install deps, run onetree.bootstrap
+#   bootstrap [path]           copy onetree.copy and .worktreeinclude files, install deps, run onetree.bootstrap
 #
 # Agents
 #   launch [--task <slug>] <agent> [args…]
@@ -950,7 +950,7 @@ info_json() {  # main -> the effective config plus, under sources, the layer eac
   deps_state "$m" "$m"
   jq -cn --arg repo "$(basename "$m")" --arg main "$m" --argjson registered "$reg" --argjson guard "$(guarded "$m" && echo true || echo false)" \
     --arg int "$(integration "$m")" --arg root "$(root_of "$m")" --arg prefix "$(prefix_of "$m")" \
-    --arg copy "$(cfg copy "$m" ".env .env.local")" --arg keep "$(cfg keep "$m" "")" --arg keepSource "$(tilde "$(cfg keepSource "$m" "$m")")" \
+    --arg copy "$(copy_list "$m")" --argjson wtinclude "$([[ -f "$m/.worktreeinclude" ]] && echo true || echo false)" --arg keep "$(cfg keep "$m" "")" --arg keepSource "$(tilde "$(cfg keepSource "$m" "$m")")" \
     --arg bootstrap "$(cfg bootstrap "$m" "")" --arg stale "$(cfg stale "$m" 24)" --argjson committed "$([[ -f "$m/.onetree" ]] && echo true || echo false)" \
     --arg remote "$RB" --arg pushRemote "$RP" --arg slug "$(gh_slug "$m")" --arg pushSlug "$(remote_slug "$m" "$RP")" --arg ghUser "$ghu" \
     --arg writable "$(wr_entries "$m" | tr '\n' ' ')" --arg ignored "$REM_SKIPPED" --argjson lockIgnored "$(lock_ignored "$m" && echo true || echo false)" \
@@ -962,7 +962,7 @@ info_json() {  # main -> the effective config plus, under sources, the layer eac
     def words: if .=="" then [] else split(" ") | map(select(.!="")) end;
     def orNull: if .=="" then null else . end;
     {repo:$repo, main:$main, registered:$registered, production:$production, productionConflict:$productionConflict, devClone:($devClone|orNull), guard:$guard, integration:$int, root:$root, worktreeDir:($root+"/"+$repo),
-     branchPrefix:$prefix, copy:($copy|words), keep:($keep|words), keepSource:$keepSource,
+     branchPrefix:$prefix, copy:($copy|words), worktreeInclude:$wtinclude, keep:($keep|words), keepSource:$keepSource,
      bootstrap:(if $bootstrap=="" then null else $bootstrap end), stale:($stale|tonumber? // null), committedFile:$committed,
      sources:{guard:$s_guard, integration:$s_int, root:$s_root, branchPrefix:$s_prefix, copy:$s_copy, keep:$s_keep,
               keepSource:$s_keepSource, bootstrap:$s_bootstrap, stale:$s_stale},
@@ -1383,10 +1383,20 @@ deps_out() {
 }
 
 # ---- new: create a worktree and make it ready to work in
+copy_list() {  # main -> onetree.copy; its .env default only for a repo without a .worktreeinclude, which then says what to copy
+  if [[ -f "$1/.worktreeinclude" ]]; then cfg copy "$1" ""; else cfg copy "$1" ".env .env.local"; fi
+}
+included() {  # main -> NUL-separated: the gitignored files its .worktreeinclude matches, the rule Claude Code copies by
+  [[ -f "$1/.worktreeinclude" ]] || return 0
+  git -C "$1" ls-files -z --others --ignored --exclude-from=.worktreeinclude | git -C "$1" check-ignore -z --stdin || true
+}
 bootstrap() {  # main path — copy the gitignored bits a fresh checkout lacks, install deps, run the project's own hook
   local main=$1 path=$2 f pm inst custom out
-  local -a fs; read -ra fs <<<"$(cfg copy "$main" ".env .env.local")"
+  local -a fs; read -ra fs <<<"$(copy_list "$main")"
   for f in ${fs[@]+"${fs[@]}"}; do [[ -e "$main/$f" && ! -e "$path/$f" ]] && cp -Rp "$main/$f" "$path/$f"; done
+  while IFS= read -r -d '' f; do
+    [[ -e "$path/$f" ]] || { mkdir -p "$path/$(dirname "$f")" && cp -Rp "$main/$f" "$path/$f"; }
+  done < <(included "$main")
   if [[ -f "$path/package.json" && ! -d "$path/node_modules" ]]; then
     if   [[ -f "$path/pnpm-lock.yaml" ]]; then pm=pnpm; inst="pnpm install --frozen-lockfile --ignore-scripts"
     elif [[ -f "$path/yarn.lock" ]];      then pm=yarn; inst="yarn install --frozen-lockfile --ignore-scripts"
@@ -2287,16 +2297,17 @@ cmd_info() {
   local json=0 target="" a; for a in "$@"; do [[ $a == --json ]] && json=1 || target=$a; done
   local main; main=$(main_of "$target"); local reg=no r; while IFS= read -r r; do [[ -n "$r" ]] || continue; [[ "$(real "$r")" == "$main" ]] && reg=yes; done < <(repos_all)
   if [[ $json == 1 ]]; then info_json "$main" | jq .; return 0; fi
-  local int ghu wr k prod=no dev; int=$(integration "$main"); remotes_resolve "$main"
+  local int ghu wr cp k prod=no dev; int=$(integration "$main"); remotes_resolve "$main"
   production "$main" && prod=yes; dev=$(dev_clone "$main")
   printf 'repo          %s\nmain          %s\nregistered    %s\nproduction    %s\nproductionConflict %s\ndevClone      %s\nguard         %s\nintegration   %s\n' "$(basename "$main")" "$main" "$reg" "$prod" "$([[ $reg == yes && $prod == yes ]] && echo yes || echo no)" "${dev:-(not set)}" "$(cfg guard "$main" false)" "$int"
   printf 'remote        %s (%s) %s\npushRemote    %s (%s) %s\n' "$RB" "$RB_SRC" "$(remote_slug "$main" "$RB")" "$RP" "$RP_SRC" "$(remote_slug "$main" "$RP")"
   if cfg_find_clone ghUser "$main"; then ghu="$CFG_VAL ($CFG_SRC)"; else ghu="(gh's active account)"; fi
   wr=$(wr_entries "$main" | tr '\n' ' '); wr=${wr% }
   if lock_ignored "$main"; then wr="${wr:-(none)} (onetree.lockIgnored: listed paths only)"; else wr="gitignored paths${wr:+, and listed: $wr}"; fi
+  cp=$(copy_list "$main"); [[ -f "$main/.worktreeinclude" ]] && cp=".worktreeinclude${cp:+, and: $cp}"
   deps_state "$main" "$main"
   printf 'ghUser        %s\nworktrees     %s/%s/<slug>\nbranch        %s<slug>\ncopy          %s\nkeep          %s\nkeepSource    %s\nwritable      %s\nbootstrap     %s\nstale         %sh\ndeps          %s\n' \
-    "$ghu" "$(root_of "$main")" "$(basename "$main")" "$(prefix_of "$main")" "$(cfg copy "$main" ".env .env.local")" "$(cfg keep "$main" "(none)")" "$(cfg keepSource "$main" "$main")" "$wr" "$(cfg bootstrap "$main" "(auto: lockfile-based)")" "$(cfg stale "$main" 24)" \
+    "$ghu" "$(root_of "$main")" "$(basename "$main")" "$(prefix_of "$main")" "${cp:-(none)}" "$(cfg keep "$main" "(none)")" "$(cfg keepSource "$main" "$main")" "$wr" "$(cfg bootstrap "$main" "(auto: lockfile-based)")" "$(cfg stale "$main" 24)" \
     "$([[ $DEPS_STATE == none ]] && echo "(no package.json)" || echo "$DEPS_PM, $DEPS_STATE: $DEPS_WHY")"
   for k in $REM_SKIPPED; do printf 'onetree: warning: the committed .onetree sets %s; ignored, because it names something per clone. Set it with onetree init --%s\n' "$k" "$(case $k in pushRemote) echo push-remote ;; ghUser) echo gh-user ;; *) echo remote ;; esac) <value>" >&2; done
   [[ $reg == yes && $prod == yes ]] && printf 'onetree: warning: this production checkout is still registered; run `onetree unregister %s` in a terminal before leaving the marker set\n' "$main" >&2

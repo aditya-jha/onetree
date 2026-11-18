@@ -1373,6 +1373,24 @@ eq "bootstrap: with no dependency step it still succeeds and prints one line" "$
 has "bootstrap: with no package.json, uv.lock or onetree.bootstrap it says no dependency step ran on stderr" "$(cat "$TMP/bootstrap.err")" '^onetree: no dependency step ran'
 $ONETREE rm --force boot-nested "$CM" >/dev/null 2>&1 || true
 
+# ---- .worktreeinclude: the list Claude Code copies from, read by new too, so a repo keeps one list
+git init -q --bare -b main wi.git
+git clone -q wi.git wimain 2>/dev/null
+WI=$TMP/wimain
+( cd wimain && printf '.env*\nconfig/\nkeys/\n*.log\nnotes.local\n' > .gitignore && printf '.env\nconfig/\nkeys/a\n**/*.log\n!skip.log\nREADME.md\ntodo.txt\n' > .worktreeinclude \
+  && echo r > README.md && git add . && git commit -qm init && git push -q origin main ) 2>/dev/null
+mkdir -p "$WI/config/deep" "$WI/keys" "$WI/src"
+for f in .env .env.local config/local.yml config/deep/x.yml keys/a keys/b src/a.log skip.log notes.local todo.txt; do echo "$f" > "$WI/$f"; done
+$ONETREE init --no-guard --root "$TMP/worktrees" "$WI" >/dev/null 2>&1
+wp=$($ONETREE new wi-a "$WI" 2>/dev/null)
+eq "new: copies the gitignored files .worktreeinclude matches; not a tracked or a git-would-track file, a negated one, the rest of a directory, or the .env default" \
+  "$(cd "$wp" && git ls-files --others | LC_ALL=C sort | tr '\n' ' ')$(cat "$wp/config/deep/x.yml")" ".env config/deep/x.yml config/local.yml keys/a src/a.log config/deep/x.yml"
+$ONETREE init --copy notes.local "$WI" >/dev/null 2>&1; $ONETREE bootstrap "$wp" >/dev/null 2>&1
+json_is "onetree.copy adds to .worktreeinclude: bootstrap copies its entries, and info names both" \
+  "$($ONETREE info --json "$WI" | jq --arg t "$($ONETREE info "$WI" | grep '^copy ')" --arg n "$(cat "$wp/notes.local" 2>/dev/null)" '{copy, worktreeInclude, t:$t, n:$n}')" \
+  '.copy == ["notes.local"] and .worktreeInclude == true and .t == "copy          .worktreeinclude, and: notes.local" and .n == "notes.local"'
+$ONETREE rm --force wi-a "$WI" >/dev/null 2>&1 || true
+
 # ==== part 3
 # ---- review by PR number: GitHub serves pull/<n>/head on the base repo, also when the head lives in a contributor's fork
 git init -q --bare -b main pb.git

@@ -43,7 +43,7 @@ when run from a git clone that is not at a release tag.
 | `guard` | `false` | make the main checkout a read-only mirror |
 | `root` | `~/worktrees` | worktrees live at `<root>/<repo>/<slug>`. A root inside a checkout is excluded from git: through `.git/info/exclude` when guarded, else `.gitignore` |
 | `branchPrefix` | `feature/` | a branch is named `<prefix><slug>` |
-| `copy` | `.env .env.local` | gitignored files copied from the main checkout into a new worktree |
+| `copy` | `.env .env.local`, or none when the repo has a `.worktreeinclude` | gitignored files copied from the main checkout into a new worktree, in addition to those `.worktreeinclude` matches (see below) |
 | `keep` | none | gitignored files gc must not lose: a worktree holding one that differs from `keepSource` is kept |
 | `keepSource` | the main checkout | the directory holding the current copy of the `keep` files |
 | `bootstrap` | none | a shell command run inside a new worktree, after the built-in dependency install, with `ONETREE_MAIN` and `ONETREE_PATH` set |
@@ -69,6 +69,26 @@ A committed `.onetree`:
 	bootstrap = make setup
 	copy = .env config/local.yml
 ```
+
+### `.worktreeinclude`
+
+A committed `.worktreeinclude` at the root of the main checkout lists, in
+`.gitignore` syntax, the local files a new worktree needs. Claude Code reads it
+for the worktrees it makes; `onetree new` and `onetree bootstrap` read it too,
+so a repo keeps one list. A file is copied when it
+matches a pattern and git ignores it, so a tracked file, or an untracked one
+git would track, never is. A file the worktree already has is left alone.
+
+```
+.env
+config/local.yml
+**/*.pem
+!test.pem
+```
+
+With a `.worktreeinclude` the `.env .env.local` default of `copy` no longer
+applies; a `copy` you set still adds its entries. `onetree info` shows the
+file on its `copy` line (`worktreeInclude` in `--json`).
 
 ## Production checkouts
 

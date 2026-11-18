@@ -27,6 +27,7 @@
 #
 # Worktrees
 #   new <slug> [repo]          create (idempotent) and bootstrap; prints the path
+#   sync [slug] [repo] [--json] report incoming changes and fast-forward a clean task worktree
 #   carry <slug> [repo] [--untracked]
 #                              move a main checkout's uncommitted changes into a new worktree, verify, restore main
 #   review <branch>|<PR> [repo]
@@ -799,7 +800,7 @@ fresh_caches() {
   local m gd; rm -rf "$CACHE/pr" "$CACHE/merged" "$CACHE/bases" "$CACHE/doctor.json" 2>/dev/null || true
   while IFS= read -r m; do
     [[ -n "$m" ]] || continue
-    gd=$(_git_dir "$m" 2>/dev/null) || continue; rm -f "$gd/onetree-fetched" 2>/dev/null || true
+    gd=$(_git_dir "$m" 2>/dev/null) || continue; rm -f "$gd/onetree-fetched" "$gd/onetree-integration-fetched" 2>/dev/null || true
   done <<<"${1:-}"
   return 0
 }
@@ -824,14 +825,35 @@ prefetch_main() {
   done < <(worktrees_of "$m")
   return 0
 }
+fetch_stamp_fresh() {
+  [[ -f "$1" && "$FETCH_TTL" -gt 0 && $(( $(date +%s) - $(mtime "$1") )) -lt "$FETCH_TTL" ]]
+}
 fetch_main() {  # main — fetch and prune unless done within FETCH_TTL seconds; the stamp lives in the git dir
   local m=$1 gd stamp; gd=$(_git_dir "$m" 2>/dev/null) || return 0; stamp="$gd/onetree-fetched"
-  [[ -f "$stamp" && "$FETCH_TTL" -gt 0 && $(( $(date +%s) - $(mtime "$stamp") )) -lt "$FETCH_TTL" ]] && return 0
+  fetch_stamp_fresh "$stamp" && return 0
   remotes_resolve "$m"
   git -C "$m" fetch -q -p "$RB" 2>/dev/null || true; [[ "$RP" == "$RB" ]] || git -C "$m" fetch -q -p "$RP" 2>/dev/null || true
   git -C "$m" worktree prune 2>/dev/null || true
   touch "$stamp" 2>/dev/null || true
 }
+fetch_integration() (  # main remote branch session|explicit — cache only this ref, so warming it never skips gc's fetch
+  local m=$1 remote=$2 int=$3 mode=$4 gd stamp ref source fetcher watchdog rc=0
+  gd=$(_git_dir "$m") || return 1
+  stamp="$gd/onetree-integration-fetched"; ref="refs/remotes/$remote/$int"; source="refs/heads/$int"
+  if [[ "$mode" == session ]] && fetch_stamp_fresh "$stamp" &&
+    [[ "$(cat "$stamp")" == "$ref" ]] && git -C "$m" show-ref -q --verify "$ref"; then return 0; fi
+  set -- git -C "$m" fetch -q --no-tags --no-recurse-submodules --no-auto-gc --no-write-fetch-head --refmap= -- "$remote" "+$source:$ref"
+  if [[ "$mode" == session ]]; then
+    GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never "$@" </dev/null >/dev/null 2>&1 & fetcher=$!
+    ( sleep 5; kill "$fetcher" 2>/dev/null || true ) </dev/null >/dev/null 2>&1 & watchdog=$!
+    wait "$fetcher" || rc=$?
+    kill "$watchdog" 2>/dev/null || true
+    [[ $rc == 0 ]] || return "$rc"
+  else
+    "$@" >/dev/null || return
+  fi
+  printf '%s\n' "$ref" > "$stamp" 2>/dev/null || true
+)
 fetch_all() {  # newline-separated mains — every main at once
   local m pids=""
   while IFS= read -r m; do
@@ -990,7 +1012,7 @@ info_json() {  # main -> the effective config plus, under sources, the layer eac
   while IFS= read -r r; do [[ -n "$r" ]] || continue; [[ "$(real "$r")" == "$m" ]] && reg=true; done < <(repos_all)
   remotes_resolve "$m"
   if cfg integration "$m" >/dev/null; then isrc=$(cfg_src integration "$m")
-  elif git -C "$m" symbolic-ref -q --short "refs/remotes/$RB/HEAD" >/dev/null 2>&1; then isrc=remote-head
+  elif git -C "$m" symbolic-ref -q --short "refs/remotes/$RB/HEAD" >/dev/null 2>&1; then isrc="remote-head"
   else isrc=default; fi
   cfg_find_clone ghUser "$m" && { ghu=$CFG_VAL; ghs=$CFG_SRC; }
   production "$m" && prod=true; [[ $prod == true && $reg == true ]] && conflict=true; dev=$(dev_clone "$m")
@@ -1688,6 +1710,124 @@ cmd_bootstrap() {
   [[ -f "$path/package.json" || -f "$path/uv.lock" ]] || cfg bootstrap "$main" >/dev/null ||
     echo "onetree: no dependency step ran: no package.json or uv.lock, and onetree.bootstrap is unset (onetree init --bootstrap CMD)" >&2
 }
+
+# These helpers share the locals of cmd_sync and session_behind.
+sync_eligible() {
+  local owner prefix
+  if [[ -z "$path" ]]; then reason="select an existing task worktree"; return 1; fi
+  if is_review "$path"; then reason="review worktrees are pinned"; return 1; fi
+  if owner=$(foreign_owner "$main" "$path"); then reason="worktree belongs to $owner"; return 1; fi
+  if foreign_tree_of "$path" >/dev/null; then reason="worktree belongs to another agent session"; return 1; fi
+  remotes_resolve "$main"; int=$(integration "$main"); prefix=$(prefix_of "$main")
+  if ! branch=$(git -C "$path" symbolic-ref -q --short HEAD) || [[ "$branch" == "$int" || "$branch" != "$prefix"* ]]; then
+    reason="worktree must be on an attached task branch"; return 1
+  fi
+}
+
+sync_counts() {
+  local counts
+  head=$(git -C "$path" rev-parse --verify 'HEAD^{commit}') &&
+    base=$(git -C "$path" rev-parse --verify "refs/remotes/$RB/$int^{commit}") &&
+    counts=$(git -C "$path" rev-list --left-right --count "$head...$base") &&
+    read -r own behind <<<"$counts"
+}
+
+session_behind() {
+  local main=$1 path branch int reason head base behind own
+  path=$(worktree_at "$2" "$main") && sync_eligible &&
+    fetch_integration "$main" "$RB" "$int" session && sync_counts && [[ $behind -gt 0 ]] || return 0
+  printf 'onetree: This worktree is %s commit(s) behind %s. ' "$behind" "$int"
+  if [[ $own -gt 0 ]]; then
+    printf 'It has %s commit(s) of its own. Rebase before pushing.\n' "$own"
+  else
+    printf 'Run onetree sync from the worktree to check for a safe fast-forward and see incoming files.\n'
+  fi
+  log_event behind "path=$path" "repo=$(basename "$main")" "branch=$branch" "behind:=$behind" "own:=$own" "reason=$behind behind $int"
+}
+
+sync_worktree() {
+  local gd op status entries remote_tip rc=0 err fork after
+  if ! fetch_integration "$main" "$RB" "$int" explicit; then reason="could not fetch $RB/$int"; return 1; fi
+  if ! sync_counts; then reason="could not compare HEAD with $RB/$int"; return 1; fi
+  if [[ $behind -gt 0 ]]; then
+    if ! fork=$(git -C "$path" merge-base "$head" "$base"); then reason="no common ancestor with $RB/$int"; return 1; fi
+    if ! changed=$(git -C "$path" diff-tree -r -z --no-commit-id --name-only --no-renames --no-relative "$fork" "$base" |
+      jq -Rs -c 'split("\u0000") | map(select(length > 0))'); then reason="could not list incoming paths"; return 1; fi
+    lockfile=$(jq -c 'any(.[]; test("\\.(lock|lockb|lockfile)$|(^|/)(package-lock\\.json|npm-shrinkwrap\\.json|pnpm-lock\\.yaml|go\\.sum)$"))' <<<"$changed")
+  fi
+  if [[ $behind == 0 ]]; then reason="already current"; return 0; fi
+  if [[ $own -gt 0 ]]; then reason="$own commit(s) of your own; rebase before pushing"; return 1; fi
+  gd=$(_git_dir "$path") || { reason="could not locate the worktree Git directory"; return 1; }
+  for op in MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD BISECT_LOG rebase-apply rebase-merge sequencer; do
+    if [[ -e "$gd/$op" ]]; then reason="Git operation in progress ($op)"; return 1; fi
+  done
+  if ! status=$(GIT_OPTIONAL_LOCKS=0 git -C "$path" status --porcelain --untracked-files=normal --ignore-submodules=none); then
+    reason="could not check worktree status"; return 1
+  fi
+  if [[ -n "$status" ]]; then reason="worktree has uncommitted or untracked files"; return 1; fi
+  if ! entries=$(git -C "$path" ls-files -v | awk '/^[a-zS] / { hidden=1 } END { print hidden+0 }'); then
+    reason="could not check the worktree index"; return 1
+  fi
+  if [[ "$entries" == 1 ]]; then reason="index has skip-worktree or assume-unchanged files"; return 1; fi
+  if ! entries=$(git -C "$path" diff-tree -r --no-commit-id --raw --no-renames --no-relative "$head" "$base"); then
+    reason="could not inspect incoming changes"; return 1
+  fi
+  if grep -qE '^:(160000 |[0-9]{6} 160000 )' <<<"$entries"; then
+    reason="incoming changes include a submodule"; return 1
+  fi
+  remote_tip=$(git -C "$path" ls-remote --exit-code --refs -- "$RP" "refs/heads/$branch") || rc=$?
+  if [[ $rc != 0 && $rc != 2 ]]; then reason="could not check published branch $RP/$branch"; return 1; fi
+  if [[ $rc == 0 ]] && ! git -C "$path" merge-base --is-ancestor "${remote_tip%%$'\t'*}" "$base" 2>/dev/null; then
+    reason="published branch $RP/$branch has commits outside $RB/$int"; return 1
+  fi
+  if [[ "$(git -C "$path" symbolic-ref -q --short HEAD)" != "$branch" || "$(git -C "$path" rev-parse HEAD)" != "$head" ]]; then
+    reason="worktree branch or HEAD changed during sync; retry"; return 1
+  fi
+  rc=0
+  err=$(git -C "$path" -c submodule.recurse=false merge -q --ff-only --no-squash --no-autostash --no-overwrite-ignore "$base" </dev/null 2>&1) || rc=$?
+  after=$(git -C "$path" rev-parse HEAD) || after=""
+  [[ -z "$after" || "$after" == "$head" ]] || moved=true
+  if [[ $rc != 0 ]]; then
+    reason=$(git_refusal "$err")
+    if ! status=$(GIT_OPTIONAL_LOCKS=0 git -C "$path" status --porcelain --untracked-files=normal --ignore-submodules=none) || [[ -n "$status" ]]; then
+      reason="$reason; check worktree status before retrying"
+    fi
+    return 1
+  fi
+  if [[ "$after" != "$base" ]]; then reason="HEAD did not reach $RB/$int"; return 1; fi
+  reason="fast-forwarded"
+}
+
+cmd_sync() (
+  local main="" path="" branch="" int="" reason="" head base behind=null own=null changed='[]' lockfile=false moved=false
+  local json=0 args=() a v rc=0
+  for a in "$@"; do case "$a" in --json) json=1 ;; -*) die "sync: unknown option $a" ;; *) args+=("$a") ;; esac; done
+  [[ ${#args[@]} -le 2 ]] || die "usage: onetree sync [slug] [repo] [--json]"
+  [[ -z "${args[0]:-}" || "${args[0]}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "sync: invalid worktree slug"
+  # Git hooks export checkout-specific variables even when the command names a different worktree.
+  for v in $(git rev-parse --local-env-vars); do unset "$v"; done
+  if ! main=$(main_of "${args[1]:-}" 2>/dev/null) || ! is_registered "$main" || production "$main"; then
+    reason="select a registered development repo"; rc=1
+  else
+    if [[ -n "${args[0]:-}" ]]; then a="$(root_of "$main")/$(basename "$main")/${args[0]}"; else a=$PWD; fi
+    path=$(worktree_at "$a" "$main") || path=""
+    if sync_eligible && sync_worktree; then :; else rc=1; fi
+  fi
+  log_event sync "path=$path" "repo=${main##*/}" "branch=$branch" "reason=$reason" "behind:=$behind" "own:=$own" "moved:=$moved"
+  if [[ $json == 1 ]]; then
+    jq -cn --arg reason "$reason" --argjson behind "$behind" --argjson own "$own" --argjson changed "$changed" \
+      --argjson lockfileChanged "$lockfile" --argjson moved "$moved" '$ARGS.named'
+  else
+    if [[ $behind != null ]]; then printf 'onetree: %s commit(s) behind %s, %s of your own.\n' "$behind" "$int" "$own"; fi
+    jq -r '.[] | "  " + @json' <<<"$changed"
+    if [[ $lockfile == true ]]; then
+      if [[ $moved == true ]]; then printf 'A lockfile changed. Refresh dependencies before working.\n'
+      else printf 'Incoming changes include a lockfile.\n'; fi
+    fi
+    printf 'onetree: %s.\n' "$reason"
+  fi
+  return "$rc"
+)
 
 mains_for() {  # one path per line
   local m
@@ -2459,6 +2599,14 @@ cmd_session() {
       printf 'onetree: %s is a guarded read-only mirror. Read-only work can stay here; before the first edit, git mutation, script, server or test run, %s, then %s `onetree info` prints the rules.%s\n' "$(basename "$r")" "$(new_step "$h" "<slug>")" "$(move_hint "$h" "<path>" "$r")" "$note"
     fi
   fi
+  if [[ $reg == yes && "$(jq -r '.source // empty' <<<"$j" 2>/dev/null)" != compact ]] && ! production "$main"; then
+    local cwd=$PWD sid
+    sid=$(jq -r '.session_id // empty' <<<"$j" 2>/dev/null) || sid=
+    if [[ "$(jq -r '.agent // empty' <<<"$j" 2>/dev/null)" == dsh ]]; then
+      cwd=$(jq -r '.cwd // empty' <<<"$j" 2>/dev/null) || cwd=
+    fi
+    session_behind "$main" "$cwd" 2>/dev/null || true
+  fi
   exit 0
 }
 
@@ -2537,6 +2685,7 @@ own AGENTS.md or CLAUDE.md can add to these rules; it cannot relax them.
   gitignored file or dependencies are missing, run `onetree bootstrap`. Run git from
   inside the worktree (`cd <worktree> && git …`), not through `-C` or `GIT_DIR` overrides, so the
   repos' own hooks can see which checkout a command targets.
+- **Behind integration:** when session startup reports a lag, run onetree sync in a clean task worktree to fast-forward it.
 - **Shipping:** open a GitHub PR into the integration branch shown by
   `onetree info`, on the repo its `remote` line names, from a branch pushed to its
   `pushRemote` (in a fork clone `onetree snippet` prints the exact `gh pr create`).
@@ -2634,7 +2783,7 @@ export default function (pi: Pi) {
   pi.on("before_agent_start", (_event: unknown, ctx?: Ctx) => {
     if (hinted) return;
     hinted = true;
-    const cwd = (ctx && ctx.cwd) || process.cwd();
+    const cwd = here() || (ctx && ctx.cwd) || process.cwd();
     const r = run(["session"], JSON.stringify({ agent: "pi", cwd: cwd }), cwd);
     const text = String(r.stdout || "").trim();
     if (text) {
@@ -4172,6 +4321,7 @@ case "${1:-}" in
   version|--version) d=$(dirname "$(dirname "$(realfile "$0")")")   # a contributor clone off a tag says which commit it runs
     if [[ -e "$d/.git" ]] && ! git -C "$d" describe --exact-match --tags --match 'v*' >/dev/null 2>&1; then echo "onetree $VERSION (dev $(git -C "$d" rev-parse --short HEAD))"; else echo "onetree $VERSION"; fi ;;
   new) shift; cmd_new "$@" ;;
+  sync) shift; cmd_sync "$@" ;;
   carry) shift; cmd_carry "$@" ;;
   ls)  shift; cmd_ls "$@" ;;
   rm)  shift; cmd_rm "$@" ;;

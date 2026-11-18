@@ -1100,6 +1100,7 @@ if [[ -n "$NODE" ]] && "$NODE" -e 'process.exit(Number(process.versions.node.spl
      and .pi.write.input.path == (.pi.worktree + "/src/a.ts") and (.pi.write.blocked | not) and .pi.absolute.blocked and .pi.read.input.path == (.pi.worktree + "/README.md")'
   json_is "pi: /resume restores the session's worktree; without onetree every call is refused" "$ag" \
     '.piResumed.input.command == ("cd '"'"'" + .pi.worktree + "'"'"' && ls") and .piMissing.blocked and (.piMissing.reason | test("ENOENT|unavailable"))'
+  json_is "pi: a resumed session asks for the notice in its restored worktree" "$ag" '.piHintCwd == .pi.worktree'
   json_is "pi: a session whose worktree is gone is told so on its first call, which does not run, and its next calls run in its own folder (#43)" "$ag" \
     '.piGone | .gone as $g | .first.blocked and (.first.reason | contains($g + ", the worktree this session worked in, is gone")) and .next == {input: {command: "ls"}, blocked: false, reason: ""}'
   json_is "pi: a worktree of a trusted main is trusted; the main itself, a review checkout and an untrusted main's worktree are left to pi" "$ag" \
@@ -1749,6 +1750,107 @@ cmds=$(sed -n '/^case "${1:-}" in$/,/^esac/p' "$ONETREE" | grep -oE '^  [a-z][a-
 keys=$(grep -oE '\b(cfg|cfg_find_clone) [a-z][A-Za-z]+' "$ONETREE" | cut -d' ' -f2 | grep -vxE 'lookup|onetree' | sort -u)
 undoc=$(for w in $cmds $keys; do grep -qE "\`(onetree )?$w([^a-zA-Z-]|$)" "$REF" || printf '%s ' "$w"; done)
 if [[ -z "$undoc" && -n "$cmds" && -n "$keys" ]]; then ok "reference.md documents every subcommand and config key"; else bad "reference.md documents every subcommand and config key" "missing: ${undoc:-the extraction found nothing}"; fi
+
+# ==== part 8
+# ---- sync: make all task worktrees before publishing the new integration commit
+printf '%s\n' ignored-top 'dir/private' 'parent' > "$MAIN/.gitignore"
+mkdir "$MAIN/dir"; echo tracked > "$MAIN/dir/item"
+git -C "$MAIN" add .; git -C "$MAIN" commit -qm fixture; git -C "$MAIN" push -q origin main
+s=$($ONETREE new sync "$MAIN"); c=$($ONETREE new collision "$MAIN")
+d=$($ONETREE new dirty "$MAIN"); o=$($ONETREE new own "$MAIN")
+pub=$($ONETREE new published "$MAIN"); g=$($ONETREE new gitlink "$MAIN")
+r=$($ONETREE review main "$MAIN")
+before=$(git -C "$s" rev-parse HEAD); key=$(git -C "$MAIN" rev-parse --absolute-git-dir)
+git -C "$o" commit -qm work --allow-empty
+git -C "$pub" push -q origin "$(git -C "$o" rev-parse HEAD):refs/heads/feature/published"
+eq "session: no freshness message or event on a current task branch" \
+  "$(cd "$s" && $ONETREE session </dev/null)$($ONETREE events --kind behind --json | jq -r length)" "0"
+rm "$MAIN/dir/item"; rmdir "$MAIN/dir"; echo incoming > "$MAIN/dir"
+echo incoming > "$MAIN/ignored-top"
+mkdir "$MAIN/parent"; echo incoming > "$MAIN/parent/item"
+echo '{}' > "$MAIN/package-lock.json"; unusual=$'line\nbreak'
+git -C "$MAIN" mv README.md "$unusual"
+git -C "$MAIN" add -Af; git -C "$MAIN" commit -qm incoming; git -C "$MAIN" push -q origin main
+tip=$(git -C "$MAIN" rev-parse HEAD)
+git -C "$MAIN" update-ref refs/remotes/origin/main "$before"   # a push from a different clone would leave the cache here unchanged
+eq "session: a warm fetch cache can briefly omit new remote commits" "$(cd "$s" && ONETREE_FETCH_TTL=3600 $ONETREE session </dev/null)" ""
+notice=$(cd "$s" && ONETREE_FETCH_TTL=0 $ONETREE session </dev/null)
+has "session: a cold fetch reports the lag in one line" "$notice" '^onetree: This worktree is 1 commit\(s\) behind main\..*onetree sync'
+eq "new: reuse still leaves a behind worktree at its original commit" \
+  "$($ONETREE new sync "$MAIN") $(git -C "$s" rev-parse HEAD)" "$s $before"
+eq "session: never advances a pinned review checkout" "$(cd "$r" && $ONETREE session </dev/null)$(git -C "$r" rev-parse HEAD)" "$before"
+
+sync_denied() {
+  local desc=$1 target=$2 why=$3 out rc=0 old
+  old=$(git -C "$target" rev-parse HEAD)
+  out=$(cd "$target" && $ONETREE sync --json 2>/dev/null) || rc=$?
+  json_is "sync: $desc" "$(jq -n --argjson status "$rc" --argjson result "$out" --arg before "$old" \
+    --arg head "$(git -C "$target" rev-parse HEAD)" --arg why "$why" '$ARGS.named')" \
+    '.why as $why | .status == 1 and .head == .before and (.result | .moved == false and (.reason | contains($why)))'
+}
+for f in dir/private ignored-top parent; do
+  printf '%s\n' local > "$c/$f"
+  sync_denied "refuses to overwrite ignored $f" "$c" "overwrite"
+  eq "sync: preserves ignored $f contents" "$(cat "$c/$f")" local
+  rm "$c/$f"
+done
+echo new > "$d/untracked"; git -C "$d" config status.showUntrackedFiles no
+sync_denied "refuses untracked files even with status.showUntrackedFiles=no" "$d" "untracked"
+rm "$d/untracked"
+git -C "$d" config merge.autostash true
+echo draft > "$d/README.md"
+sync_denied "refuses tracked edits even when autostash is configured" "$d" "uncommitted"
+git -C "$d" restore README.md
+for flag in assume-unchanged skip-worktree; do
+  git -C "$d" update-index "--$flag" README.md
+  sync_denied "refuses index entries marked $flag" "$d" "$flag"
+  git -C "$d" update-index "--no-$flag" README.md
+done
+dir=$(git -C "$d" rev-parse --absolute-git-dir)
+echo "$before" > "$dir/MERGE_HEAD"
+sync_denied "refuses an ongoing Git operation" "$d" "MERGE_HEAD"
+rm "$dir/MERGE_HEAD"
+printf '%s\n' $'different\t-\t-' > "$dir/onetree-owners"
+ONETREE_SESSION_ID=sync-test sync_denied "refuses another session's worktree" "$d" "another agent"
+rm "$dir/onetree-owners"
+sync_denied "refuses a branch with its own commits" "$o" "of your own"
+sync_denied "refuses a remote task branch with other work" "$pub" "published branch"
+sync_denied "refuses pinned review worktrees" "$r" "pinned"
+sync_denied "refuses the main checkout" "$MAIN" "existing task worktree"
+(cd "$d" && git switch -q --detach)
+sync_denied "refuses detached task worktrees" "$d" "attached task branch"
+
+# Even a user-configured squash or post-merge output must leave sync a fast-forward with one JSON result.
+git -C "$s" config branch.feature.sync.mergeOptions --squash
+printf '#!/bin/sh\necho from-post-merge\n' > "$key/hooks/post-merge"; chmod +x "$key/hooks/post-merge"
+out=$(cd "$MAIN" && GIT_DIR="$key" GIT_WORK_TREE="$MAIN" $ONETREE sync sync "$MAIN" --json)
+json_is "sync: explicit target wins over inherited Git variables and reports the before/after comparison" "$out" \
+  '.behind == 1 and .own == 0 and .moved and .reason == "fast-forwarded" and .lockfileChanged and .changed == ["README.md","dir","dir/item","ignored-top","line\nbreak","package-lock.json","parent/item"]'
+eq "sync: advances only the named task branch" "$(git -C "$s" rev-parse HEAD) $(git -C "$c" rev-parse HEAD)" "$tip $before"
+json_is "sync: logs the successful move" "$($ONETREE events --kind sync --json)" 'last | .moved and .behind == 1 and .own == 0'
+json_is "session: logs when a behind notice was printed" "$($ONETREE events --kind behind --json)" 'last | .behind == 1 and .own == 0'
+json_is "sync: a repeated sync is a no-op" "$(cd "$s" && $ONETREE sync --json)" '.behind == 0 and .own == 0 and .changed == [] and .moved == false and .reason == "already current"'
+
+git -C "$MAIN" update-index --add --cacheinfo "160000,$tip,submodule"
+git -C "$MAIN" commit -qm gitlink; git -C "$MAIN" push -q origin main
+sync_denied "refuses incoming submodule changes" "$g" "submodule"
+git -C "$MAIN" remote add upstream "$TMP/origin.git"
+git -C "$MAIN" remote set-url origin "$TMP/no-such-origin"
+out=$(cd "$g" && $ONETREE sync --json) || true
+json_is "sync: a fork compares against upstream before looking at the push remote" "$out" '.behind == 2 and (.reason | contains("submodule"))'
+git -C "$MAIN" remote set-url upstream "$TMP/no-such-upstream"
+rm -f "$key/onetree-integration-fetched"
+out=$(cd "$g" && $ONETREE sync --json 2>/dev/null) || true
+json_is "sync: a failed fetch reports unavailable counts" "$out" '.behind == null and .own == null and (.reason | contains("could not fetch upstream/main"))'
+eq "session: failed fetch is quiet and does not write a freshness stamp" \
+  "$(cd "$g" && $ONETREE session </dev/null)$([[ -e "$key/onetree-integration-fetched" ]] && echo cached)" ""
+
+mkdir "$TMP/slow-fetch"
+printf '#!/bin/sh\ncase " $* " in *" fetch "*) exec sleep 30 ;; esac\nexec %s "$@"\n' "$(command -v git)" > "$TMP/slow-fetch/git"
+chmod +x "$TMP/slow-fetch/git"
+started=$SECONDS; notice=$(cd "$g" && PATH="$TMP/slow-fetch:$PATH" $ONETREE session </dev/null)
+if [[ -z "$notice" && $((SECONDS-started)) -lt 10 ]]; then ok "session: a stalled fetch times out quietly"
+else bad "session: a stalled fetch times out quietly" "$((SECONDS-started)) seconds; $notice"; fi
 
 # ==== end
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

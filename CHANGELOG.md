@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Session startup reports when a task worktree is behind its integration
+  branch. Run onetree sync for incoming paths and a safe fast-forward.
+  Behind notices and sync results appear in onetree events (#53).
+
 - An agent session can no longer change another session's worktree. The
   sessions that made or asked for a worktree (`onetree new`, `carry`,
   `launch`) are recorded as its owners; for any other session the guard

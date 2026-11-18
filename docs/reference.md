@@ -253,6 +253,25 @@ Both are validated like `--writable` and print the resulting list.
 so only what `writable` lists stays writable. `onetree init --no-lock-ignored`
 gives the ignored paths `u+w` back.
 
+### Updating a task worktree
+
+Run `onetree sync` inside the worktree or `onetree sync <slug> [repo]`
+from another checkout. The command fetches the integration branch from the
+base remote and reports how many commits are incoming, how many are local,
+the incoming paths, and whether any lockfile changed. It fast-forwards a
+clean task branch if it can preserve local and published work. Refresh
+dependencies if the fast-forward changed a lockfile.
+
+Sync refuses dirty or untracked files, conflicting ignored files, commits
+outside the integration branch, ongoing Git operations, hidden index changes
+and incoming submodule changes. Review, detached and other agents' worktrees
+are ineligible. `onetree new` still returns the existing checkout unchanged.
+
+`onetree sync --json` emits `behind`, `own`, `changed` (an array of paths),
+`lockfileChanged`, `moved` and `reason`. Counts describe the pre-sync
+comparison and are null when unavailable. A refused sync exits nonzero.
+`onetree events --kind sync` lists sync attempts.
+
 ### A dirty main: onetree carry
 
 `onetree init --guard` on a main with uncommitted changes warns, lists each
@@ -541,6 +560,11 @@ session's pid, session id, agent and folder in
 exports `CLAUDE_CODE_SESSION_ATTENDED=0` for `-p`; Codex `exec` is recognised
 by its process ancestry) hears nothing outside a registered repo; a guarded
 checkout's notice and its guard apply to every session.
+
+In an eligible worktree, startup gives a short notice if its branch is
+behind. The integration fetch uses `ONETREE_FETCH_TTL`, so the notice may
+lag the remote. A failed fetch skips the notice. Startup never moves the
+worktree. `onetree events --kind behind` lists the notices.
 
 The shell wrappers (`~/.onetree-agents.sh`, sourced by zsh and bash) start
 `claude`, `codex`, `pi` and `dsh` through `onetree launch`. `claude -p` /

@@ -52,8 +52,13 @@ async function pi(opts = {}) {
 }
 // pi: /resume restores the worktree from the session's own entries
 {
-  const host = await pi({ branch: [{ type: "custom", customType: "onetree-worktree", data: { path: out.pi.worktree } }] });
+  const branch = [{ type: "custom", customType: "onetree-worktree", data: { path: out.pi.worktree } }];
+  const host = await pi({ branch });
   out.piResumed = host.call("bash", { command: "ls" });
+  const reporter = join(process.env.HOME, "report-cwd");
+  writeFileSync(reporter, "#!/bin/sh\npwd -P\n", { mode: 0o755 });
+  const resumed = await pi({ branch, missing: reporter });
+  out.piHintCwd = resumed.on.before_agent_start({}, { cwd: mirror }).message.content;
 }
 // pi: a bound worktree that is gone is said once, then calls run in the session's own folder
 {

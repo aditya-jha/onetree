@@ -544,6 +544,9 @@ guard_table "parser: in a mirror a quoted command line handed to a program is ju
   block 'find . -maxdepth 0 -exec git read-tree --empty \;' \
   allow 'find . -maxdepth 0 -exec git -C . status \;'  allow "gh issue create --title x --body 'run git stash pop first'" \
   allow "jq '.a | .b' package.json"       allow "awk '{ print \$1 }' README.md"
+guard_table "parser: in a mirror an awk program is read as awk: a comparison is data; print > file, a pipe and system() are writes" "$MAIN" \
+  allow "awk -F: '\$1>2 && \$1<3' README.md"  block "awk '{ print \$1 > \"out\" }' README.md" \
+  block "awk '{ print | \"sh\" }' README.md"  block "awk 'BEGIN { system(\"git stash\") }'"
 guard_table "parser: in a mirror a shell reading its commands from stdin is refused (the guard can't see them); cd - goes back; find -exec grep's words are data" "$MAIN" \
   block "$(printf "bash <<'EOF'\ngit branch -D topic\nEOF")"  block "echo 'git stash' | bash" \
   block 'bash -s'                         allow 'bash --version' \

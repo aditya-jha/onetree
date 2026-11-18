@@ -55,6 +55,11 @@ async function pi(opts = {}) {
   const host = await pi({ branch: [{ type: "custom", customType: "onetree-worktree", data: { path: out.pi.worktree } }] });
   out.piResumed = host.call("bash", { command: "ls" });
 }
+// pi: a bound worktree that is gone is said once, then calls run in the session's own folder
+{
+  const host = await pi({ branch: [{ type: "custom", customType: "onetree-worktree", data: { path: join(mirror, "gone-tree") } }] });
+  out.piGone = { gone: join(mirror, "gone-tree"), first: host.call("bash", { command: "ls" }), next: host.call("bash", { command: "ls" }) };
+}
 // pi: without onetree a call is refused, as before
 {
   const host = await pi({ missing: true });

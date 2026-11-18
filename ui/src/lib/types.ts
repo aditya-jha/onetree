@@ -49,6 +49,7 @@ export interface Info {
   worktreeDir: string;
   branchPrefix: string;
   copy: string[];
+  worktreeInclude: boolean;
   keep: string[];
   keepSource: string;
   bootstrap: string | null;

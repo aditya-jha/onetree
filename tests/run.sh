@@ -1933,8 +1933,11 @@ eq "gc --all: a registry parse failure is surfaced" "$rc $json $(grep -Fc "$TMP/
 git config -f "$ONETREE_CONFIG" --replace-all onetree.repo "$MAIN"
 $ONETREE gc --all >/dev/null
 eq "doctor: a successful interactive gc cannot mask a failed scheduled run" "$(gc_health)" '[false]'
+$ONETREE init --guard "$MAIN" >/dev/null
 ONETREE_SCHEDULED=1 $ONETREE gc --all >/dev/null
-eq "doctor: a complete scheduled scan restores health" "$(gc_health)" '[true]'
+eq "scheduled gc: parking a guarded mirror still records the run and restores doctor health" \
+  "$(gc_health) $($ONETREE events --kind gc-run --json -n 1 | jq -c 'last | [.scheduled,.status,.configured,.accessible]')" \
+  '[true] [true,0,1,1]'
 jq '.t -= 7201' "$result" > "$TMP/stale-result"; mv "$TMP/stale-result" "$result"
 eq "doctor: a successful but stale scheduled scan is unhealthy" "$(gc_health)" '[false]'
 printf 'invalid json\n' > "$result"

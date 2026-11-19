@@ -582,15 +582,17 @@ release_park_lock() {
   if [[ -L "$l" ]]; then [[ "$(readlink "$l")" == "$$ "* ]] && rm -f "$l"; else rm -rf "$l"; fi
 }
 with_main_unlocked() {
-  local main=$1 gd st=0; shift
+  local main=$1 gd st=0 prior_traps; shift
   gd=$(_git_dir "$main")
   acquire_park_lock "$gd" || return 1
+  prior_traps=$(trap -p EXIT INT TERM HUP)
   relock_on_exit "lock_main $(printf %q "$main") || true; release_park_lock $(printf %q "$gd")"
   unlock_main "$main" || true
   if [[ $# -gt 0 ]]; then "$@" || st=$?; fi
   lock_main "$main" || true
   release_park_lock "$gd"
   relock_on_exit ""
+  eval "$prior_traps"
   return $st
 }
 # command — run it if onetree is killed or exits inside an unlock window, so main never stays writable; "" when the

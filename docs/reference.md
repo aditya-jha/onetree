@@ -456,6 +456,14 @@ agent's global instructions. It tells every agent to:
   push, never force-push, and say "worktree `<path>` is done" when the PR
   merges.
 
+In the Claude desktop app, a session moved into a worktree is listed under
+that worktree's folder, and the app keeps it after `onetree gc` removes the
+worktree, leaving a sidebar group for a folder that no longer exists. Turn on
+Settings → Claude Code → "Auto-archive sessions when their pull request
+closes": the session then archives when its PR merges, the same moment gc
+takes the worktree. It is an account setting onetree can't change, so
+`install` prints a note when the app is present.
+
 A project's own AGENTS.md or CLAUDE.md can add to these rules, for example
 which ports its dev servers bind, but can't relax them.
 

@@ -230,7 +230,7 @@ Every event carries `ts` (UTC), `t` (epoch seconds, what `--since` compares),
 |---|---|---|
 | `guard` | the guard refused a tool call in a guarded mirror, or one that would turn the guard off or change onetree's settings (`main` and `repo` are empty when it would change every repo) | `decision` (`block`), `rule` (the guard's rule name), `tool`, `agent`, `session`, `pid` (the agent process, see Agents), `cwd`, `path`, `main`, `repo`, `command`, `file` |
 | `gc` | a worktree was removed, by `gc`, `rm` or the WorktreeRemove hook | `action` (`remove`), `code` (`pr-merged`, `pr-closed`, `in-integration`, `review`, `on-remote`, `forced`), `reason`, `path`, `repo`, `branch` |
-| `gc-run` | a real (not dry) `onetree gc` finished | `target`, `kept`, `removed`, `parked`, `fastForwarded`, `seconds` |
+| `gc-run` | a real (not dry) `onetree gc` finished | `target`, `kept`, `removed`, `parked`, `fastForwarded`, `seconds`; for `--all`, also `scheduled`, `status` (exit code), `configured`, `accessible`, `evaluated` (worktrees), `errors` (scan errors), `failedPaths` |
 | `park` | a guarded main was parked or fast-forwarded | `action` (`parked`, `fast-forwarded`), `code`, `reason`, `main`, `repo` |
 | `new` | `onetree new` created a worktree, or an agent ran it again on one (`reused`) | `path`, `repo`, `branch`, `seconds` (how long it took; not on `reused`), `resumed` (true when the branch already existed), `agent`, `host`, `session`, `pid`, `pidStart` (the agent session that ran it; empty for a person), `subagent` (only for a Claude subagent's isolated worktree: its agent id; the session never moves there) |
 | `review` | `onetree review` made a checkout | `path`, `repo`, `branch` (`#<n>` for a PR, with `pr`: the number) |

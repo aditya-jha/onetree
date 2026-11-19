@@ -758,6 +758,11 @@ server; Node 22.6+ is the only extra requirement. See
 - Cleanup consults GitHub through `gh`. Without it, gc still removes worktrees
   whose head is an ancestor of the integration branch, but can't see
   squash-merged PRs.
+- `onetree gc --all` reports registered repos it cannot inspect and exits
+  nonzero, including on a dry run. Repos it can inspect are still processed.
+  A repo with an inaccessible linked checkout is skipped to protect its
+  worktree metadata. Remove stale registrations or restore access to the
+  reported paths.
 - Two registered repos with the same directory name share a folder under
   `root`; give one of them its own `root`.
 - On macOS the installed script is a copy, not a symlink, because launchd isn't
@@ -768,6 +773,15 @@ server; Node 22.6+ is the only extra requirement. See
   `launchctl bootstrap` command that loads it, and exits non-zero, which fails
   `onetree update` too. `ONETREE_LAUNCHD_WAIT` sets the wait between tries in
   seconds (default 1).
+- On macOS `onetree doctor` requires a complete scheduled GC result from the
+  last two hours. See `~/.local/state/onetree/gc-status.json` for scan coverage
+  and `~/Library/Logs/onetree.log` for errors. Give the hourly job time to
+  complete after installing, updating or waking the machine.
+- macOS privacy controls can deny launchd access to repositories or worktrees
+  in protected folders such as `~/Documents`, even when interactive GC works.
+  For unattended cleanup, keep the main checkout and its worktrees outside
+  protected folders (for example under `~/src` and `~/worktrees`). When moving
+  a checkout, repair its Git worktree links and update its onetree registration.
 - `onetree new` checks files out with one worker per core
   (`checkout.workers=0`): on a repo with 29k tracked files (2.8 GB) that takes
   the checkout from 8.7 s to 4.3 s. Repos under 100 files check out serially.

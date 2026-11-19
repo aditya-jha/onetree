@@ -1516,7 +1516,9 @@ jq -n '{hooks: {PreToolUse: [{matcher: "Bash", hooks: [{type: "command", command
   SessionStart: [{hooks: [{type: "command", command: "/opt/my-audit"}, {type: "command", command: "/opt/old/onetree session"}]}, {hooks: [{type: "mcp_tool", server: "s", tool: "t"}]}]}}' > "$HOME/.codex/hooks.json"   # onetree's session handler shares a group with the user's
 mkdir -p "$HOME/dotfiles" "$HOME/.claude"; printf '# my rules\n' > "$HOME/dotfiles/CLAUDE.md"; chmod 644 "$HOME/dotfiles/CLAUDE.md"; ln -sf "$HOME/dotfiles/CLAUDE.md" "$HOME/.claude/CLAUDE.md"
 printf '# mine\n[ -f ~/.onetree-agents.zsh ] && source ~/.onetree-agents.zsh\n' > "$HOME/.zshrc"; echo old > "$HOME/.onetree-agents.zsh"   # the earlier name
+mkdir -p "$HOME/Library/Application Support/Claude"   # the Claude desktop app is installed
 inst1=$(PATH="$WRAP_INSTALL_BIN:$PATH" $ONETREE install)
+eq "install: with the Claude desktop app present, it says to turn on auto-archive on PR close" "$(grep -c 'NOTE: Claude desktop app: turn on .*Auto-archive sessions when their pull request closes' <<<"$inst1")" 1
 eq "install: a line sourcing the wrappers' earlier name is repointed, not doubled; the old file goes; the user's lines stay" \
   "$(grep -c onetree-agents "$HOME/.zshrc") $(grep -c 'source ~/.onetree-agents\.sh$' "$HOME/.zshrc") $(grep -c '^# mine$' "$HOME/.zshrc") $([[ -e "$HOME/.onetree-agents.zsh" ]] && echo old-left || echo old-gone)" \
   "1 1 1 old-gone"

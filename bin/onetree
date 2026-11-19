@@ -3518,8 +3518,6 @@ cmd_install() {
   hook_json "$HOME/.claude/settings.json" add && echo "hooks: ~/.claude/settings.json (PreToolUse, SessionStart, WorktreeCreate, WorktreeRemove)"
   [[ -d "$HOME/.codex" ]] && hook_json "$HOME/.codex/hooks.json" pre && echo "hooks: ~/.codex/hooks.json (PreToolUse, SessionStart)"
   [[ -d "$HOME/.codex" ]] && ! codex_trusted && echo "NOTE: Codex skips onetree's hooks until you approve them: run codex, type /hooks, and approve the onetree entries it lists as new or modified."
-  # the app groups sessions by folder and keeps a session after gc removes its worktree; only auto-archive (an account setting) clears it
-  [[ -d "$HOME/Library/Application Support/Claude" ]] && echo "NOTE: Claude desktop app: turn on Settings → Claude Code → \"Auto-archive sessions when their pull request closes\", or each worktree gc removes leaves a dead folder group in the sidebar."
   write_block "$HOME/.claude/CLAUDE.md"; echo "rules: ~/.claude/CLAUDE.md"
   [[ -d "$HOME/.codex" ]] && { write_block "$HOME/.codex/AGENTS.md"; echo "rules: ~/.codex/AGENTS.md"; }
   [[ -d "$HOME/.pi/agent" ]] && { write_block "$HOME/.pi/agent/AGENTS.md"; echo "rules: ~/.pi/agent/AGENTS.md"; write_pi_extension; echo "pi: ~/.pi/agent/extensions/onetree.ts (tool_call + session)"; }

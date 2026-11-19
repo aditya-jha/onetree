@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.3.0 (2026-11-19)
+
 - `onetree gc --all` reports inaccessible registrations, records scan
   coverage, and exits nonzero on an incomplete scan. On macOS, `doctor`
   checks the last scheduled run for freshness and coverage (#57).

@@ -1746,6 +1746,8 @@ done <<'ROWS'
 0 2 0_loaded_1_0 retries a bootstrap that fails while launchd lets go, and loads the job
 0 9 1_unloaded_0_1 a bootstrap that keeps failing leaves the job unloaded: install names the command to load it and exits non-zero
 ROWS
+has_all "install (macOS): launchd starts gc in HOME and marks it scheduled" "$(cat "$LH/Library/LaunchAgents/com.onetree.gc.plist")" \
+  "<key>WorkingDirectory</key><string>$LH</string>" '<key>ONETREE_SCHEDULED</key><string>1</string>'
 
 # ---- install.sh, under sh: the newest release into ONETREE_HOME, then install; a rerun updates in place; anything else there is refused
 IH=$TMP/ihome; ID=$IH/.local/share/onetree; mkdir -p "$IH"
@@ -1871,6 +1873,72 @@ chmod +x "$TMP/slow-fetch/git"
 started=$SECONDS; notice=$(cd "$g" && PATH="$TMP/slow-fetch:$PATH" $ONETREE session </dev/null)
 if [[ -z "$notice" && $((SECONDS-started)) -lt 10 ]]; then ok "session: a stalled fetch times out quietly"
 else bad "session: a stalled fetch times out quietly" "$((SECONDS-started)) seconds; $notice"; fi
+
+# ==== part 9
+# ---- hourly gc coverage is based on actual access in the scheduled process
+mkdir -p "$TMP/gc-bin"
+printf '#!/bin/sh\necho Darwin\n' > "$TMP/gc-bin/uname"
+printf '#!/bin/sh\nexit 0\n' > "$TMP/gc-bin/launchctl"
+chmod +x "$TMP/gc-bin/uname" "$TMP/gc-bin/launchctl"
+result=$HOME/.local/state/onetree/gc-status.json
+gc_err=$TMP/gc.err
+gc_health() {
+  PATH="$TMP/gc-bin:$PATH" doctor_json | jq -c '[.checks[] | select(.name | startswith("scheduled gc covered")) | .ok]'
+}
+eq "doctor: a loaded job without a scheduled result is unhealthy" "$(gc_health)" '[false]'
+ONETREE_CONFIG=$TMP/no-registry ONETREE_NO_EVENTS=1 ONETREE_SCHEDULED=1 $ONETREE gc --all >/dev/null
+eq "scheduled gc: an empty registry is healthy even when event logging is disabled" \
+  "$(gc_health) $(jq -c '[.status,.configured,.accessible,.failedPaths]' "$result")" '[true] [0,0,0,[]]'
+
+linked="$TMP/linked parent/linked with spaces"; mkdir -p "$(dirname "$linked")"
+git -C "$MAIN" worktree add -q --detach "$linked" HEAD
+denied="$TMP/denied parent/mirror with spaces"; mkdir -p "$(dirname "$denied")"
+git clone -q origin.git "$denied"
+if [[ $(id -u) != 0 ]]; then
+  git config -f "$ONETREE_CONFIG" --add onetree.repo "$denied"
+  chmod 000 "$(dirname "$denied")"
+  rc=0; json=$(ONETREE_SCHEDULED=1 $ONETREE gc --all --json 2>"$gc_err") || rc=$?
+  eq "gc --all: scans reachable repos and reports a permission-denied registration with nonzero status" \
+    "$rc $(grep -Fc "gc cannot inspect $denied:" "$gc_err" || true) $(jq -c 'any(.[]; .gc != null)' <<<"$json")" '1 1 true'
+  json_is "gc-run: the partial scan reports coverage, evaluations, and the denied registration" \
+    "$($ONETREE events --kind gc-run --json -n 1)" \
+    "last | .scheduled and .status == 1 and .configured == 2 and .accessible == 1 and .evaluated == 1 and .errors == 1 and .failedPaths == [\"$denied\"]"
+  eq "doctor: a partial scheduled scan is unhealthy" "$(gc_health)" '[false]'
+  previous=$(cat "$result")
+  git config -f "$ONETREE_CONFIG" --unset-all onetree.repo
+  git config -f "$ONETREE_CONFIG" --add onetree.repo "$denied"
+  rc=0; json=$(ONETREE_SCHEDULED=1 $ONETREE gc --all --dry-run --json 2>"$gc_err") || rc=$?
+  eq "gc --all --dry-run: all denied is a failure and does not write a scheduled result" \
+    "$rc $json $(grep -Fc "$denied" "$gc_err" || true) $(cmp -s "$result" <(printf '%s\n' "$previous") && echo same)" '1 [] 1 same'
+  chmod 700 "$(dirname "$denied")"
+  git config -f "$ONETREE_CONFIG" --replace-all onetree.repo "$MAIN"
+  chmod 000 "$(dirname "$linked")"
+  rc=0; json=$(ONETREE_SCHEDULED=1 $ONETREE gc --all --json 2>"$gc_err") || rc=$?
+  chmod 700 "$(dirname "$linked")"
+  eq "gc --all: refuses to clean or prune a repo with an inaccessible linked checkout" \
+    "$rc $json $(grep -Fc "$linked" "$gc_err" || true) $(git -C "$MAIN" worktree list --porcelain | grep -Fc "worktree $linked")" '1 [] 1 1'
+else printf 'skip  gc permission checks: root bypasses directory permissions\n'
+fi
+
+mkdir -p "$MAIN/nested/.git"
+git config -f "$ONETREE_CONFIG" --replace-all onetree.repo "$MAIN/nested"
+rc=0; json=$(ONETREE_SCHEDULED=1 $ONETREE gc --all --json 2>"$gc_err") || rc=$?
+eq "gc --all: a wrong-root registration is never scanned as its enclosing repo" \
+  "$rc $json $(grep -Fc "gc cannot inspect $MAIN/nested:" "$gc_err" || true) $(git -C "$MAIN" worktree list --porcelain | grep -Fc "worktree $linked")" '1 [] 1 1'
+eq "gc --all: a nonempty registry with no accessible repos is recorded as failed" \
+  "$(jq -c '[.status,.configured,.accessible]' "$result")" '[1,1,0]'
+printf '[broken\n' > "$TMP/bad-config"
+rc=0; json=$(ONETREE_CONFIG=$TMP/bad-config $ONETREE gc --all --json 2>"$gc_err") || rc=$?
+eq "gc --all: a registry parse failure is surfaced" "$rc $json $(grep -Fc "$TMP/bad-config" "$gc_err" || true)" '1 [] 1'
+git config -f "$ONETREE_CONFIG" --replace-all onetree.repo "$MAIN"
+$ONETREE gc --all >/dev/null
+eq "doctor: a successful interactive gc cannot mask a failed scheduled run" "$(gc_health)" '[false]'
+ONETREE_SCHEDULED=1 $ONETREE gc --all >/dev/null
+eq "doctor: a complete scheduled scan restores health" "$(gc_health)" '[true]'
+jq '.t -= 7201' "$result" > "$TMP/stale-result"; mv "$TMP/stale-result" "$result"
+eq "doctor: a successful but stale scheduled scan is unhealthy" "$(gc_health)" '[false]'
+printf 'invalid json\n' > "$result"
+eq "doctor: a malformed scheduled result is unhealthy" "$(gc_health)" '[false]'
 
 # ==== end
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

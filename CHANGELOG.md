@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `onetree gc --all` reports inaccessible registrations, records scan
+  coverage, and exits nonzero on an incomplete scan. On macOS, `doctor`
+  checks the last scheduled run for freshness and coverage (#57).
+
 - Worktree ownership keeps one row per session ID across restarts. The next
   owner registration compacts older duplicates. Only owners without a session
   ID are matched by process (#55).

@@ -60,8 +60,8 @@
 #                              the dashboard on 127.0.0.1, over `onetree snapshot`; needs node 22.6+
 #
 # Machine
-#   install | update | uninstall
-#                              hooks for each agent found, shell wrappers, the agent rules block, the hourly gc job
+#   install [--gc-mode scheduled|opportunistic] | update | uninstall
+#                              hooks, wrappers, rules, and scheduled (default) or opportunistic gc
 #   doctor [--json]            check all of that; rules: print the rules block; version: print the version
 #
 # Hooks and adapters (called by agents and wrappers, not by hand)
@@ -97,6 +97,8 @@ VERSION=1.3.0
 CFG=${ONETREE_CONFIG:-$HOME/.config/onetree/config}
 EVENTS=${ONETREE_EVENTS:-$HOME/.local/state/onetree/events.jsonl}   # append-only record of what onetree did or refused (docs/snapshot.md)
 GC_RESULT=$HOME/.local/state/onetree/gc-status.json
+GC_LOG=$HOME/.local/state/onetree/gc.log
+GC_LOCK=$HOME/.local/state/onetree/gc.lock
 SESSIONS=${ONETREE_SESSIONS:-$HOME/.local/state/onetree/sessions}   # one <pid>.json per live agent session, written by the SessionStart hook
 ONETREE_CMD=${1:-}
 
@@ -109,6 +111,11 @@ tbl() {  # tab-separated rows on stdin -> aligned columns; column(1) is not in a
 }
 realfile() { printf '%s/%s' "$(real "$(dirname "$1")")" "$(basename "$1")"; }
 mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || echo 0; }   # GNU first: BSD stat rejects -c, but GNU stat -f %m succeeds and prints the mount point
+gc_mode() { local m; m=$(gcfg onetree.gcMode || true); printf '%s\n' "${m:-scheduled}"; }
+gc_mode_valid() { case "$1" in scheduled|opportunistic) return 0 ;; *) return 1 ;; esac; }
+gc_registry_hash() {
+  { git config -f "$CFG" --get-all onetree.repo 2>/dev/null || true; } | sed '/^$/d' | sort | cksum | awk '{print $1 ":" $2}'
+}
 clone_dir() { cp -Rc "$1" "$2" 2>/dev/null || cp -R --reflink=auto "$1" "$2" 2>/dev/null || cp -R "$1" "$2"; }  # APFS / btrfs / xfs reflink when available
 tilde() { local p=$1; p=${p/#\~/$HOME}; p=${p/#\$HOME/$HOME}; printf '%s' "$p"; }
 gcfg() { [[ -f "$CFG" ]] && git config -f "$CFG" --get "$1" 2>/dev/null; }
@@ -225,7 +232,10 @@ gh_env() {
   if cfg_find_clone ghUser "$1"; then GHT=$(gh auth token --user "$CFG_VAL" 2>/dev/null) || GHT=; fi
   return 0
 }
-ghx() { if [[ -n "$GHT" ]]; then GH_TOKEN=$GHT gh "$@"; else gh "$@"; fi; }   # gh, as gh_env chose
+ghx() {   # gh, as gh_env chose; an interactive cleanup may not hold the caller on a stuck network
+  local -a ghcmd=(gh "$@"); [[ "${ONETREE_GC_CONTEXT:-}" == opportunistic ]] && ghcmd=(bounded 6 gh "$@")
+  if [[ -n "$GHT" ]]; then GH_TOKEN=$GHT "${ghcmd[@]}"; else "${ghcmd[@]}"; fi
+}
 
 INT_MAIN=; INT_VAL=
 integration() {  # main — memoised per process; unset: the base remote's HEAD branch
@@ -841,9 +851,11 @@ prefetch_prs() {
 # main — the merged heads, then each worktree's branch (a review checkout: the branch it was made from)
 prefetch_main() {
   local m=$1 w b; remotes_resolve "$m"; [[ "$(gh_slug "$m")" == */* ]] || return 0
+  gc_deadline_reached && return 0
   merged_heads "$m" >/dev/null 2>&1 || true
   while IFS= read -r w; do
     [[ -n "$w" ]] || continue
+    gc_deadline_reached && return 0
     b=$(git -C "$w" symbolic-ref -q --short HEAD 2>/dev/null) || b=$(review_branch_of "$w")
     [[ -n "$b" ]] && { pr_info "$m" "$b" >/dev/null 2>&1 || true; }
   done < <(worktrees_of "$m")
@@ -853,10 +865,14 @@ fetch_stamp_fresh() {
   [[ -f "$1" && "$FETCH_TTL" -gt 0 && $(( $(date +%s) - $(mtime "$1") )) -lt "$FETCH_TTL" ]]
 }
 fetch_main() {  # main — fetch and prune unless done within FETCH_TTL seconds; the stamp lives in the git dir
-  local m=$1 gd stamp; gd=$(_git_dir "$m" 2>/dev/null) || return 0; stamp="$gd/onetree-fetched"
+  local m=$1 gd stamp; local -a pre=(); gd=$(_git_dir "$m" 2>/dev/null) || return 0; stamp="$gd/onetree-fetched"
   fetch_stamp_fresh "$stamp" && return 0
   remotes_resolve "$m"
-  git -C "$m" fetch -q -p "$RB" 2>/dev/null || true; [[ "$RP" == "$RB" ]] || git -C "$m" fetch -q -p "$RP" 2>/dev/null || true
+  [[ "${ONETREE_GC_CONTEXT:-}" == opportunistic ]] && pre=(bounded 6)
+  GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never GIT_HTTP_LOW_SPEED_LIMIT=1 GIT_HTTP_LOW_SPEED_TIME=5 \
+    "${pre[@]}" git -C "$m" fetch -q -p "$RB" 2>/dev/null || true
+  [[ "$RP" == "$RB" ]] || GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never GIT_HTTP_LOW_SPEED_LIMIT=1 GIT_HTTP_LOW_SPEED_TIME=5 \
+    "${pre[@]}" git -C "$m" fetch -q -p "$RP" 2>/dev/null || true
   git -C "$m" worktree prune 2>/dev/null || true
   touch "$stamp" 2>/dev/null || true
 }
@@ -1562,6 +1578,7 @@ cmd_new() {
     esac
   fi
   ensure_registered "$main"; refresh_guarded
+  [[ "$ONETREE_CMD" == new ]] && maybe_opportunistic_gc new
   local int; int=$(integration "$main"); local branch; branch="$(prefix_of "$main")$slug"; local root; root=$(root_of "$main"); local path="$root/$repo/$slug"
   # carry: a new branch at that commit, never a resumed one, so the carried changes apply as they were made
   if [[ -n "${NEW_FROM:-}" ]]; then
@@ -1892,7 +1909,7 @@ each_main() {
 # takes a clean detached checkout whose HEAD is on a remote ref (or a fetched PR head) whatever its age or PR state,
 # since it holds nothing of its own
 remove_one() {
-  local main=$1 path=$2 force=${3:-0} dry=${4:-0} explicit=${5:-0} line branch dirty unpushed pr prhead lock live head int merged=0 ghmerged=0 review=0 closed=0 onremote=0 rev="" label age stale
+  local main=$1 path=$2 force=${3:-0} dry=${4:-0} explicit=${5:-0} line branch dirty unpushed pr prhead lock live head int merged=0 ghmerged=0 review=0 closed=0 onremote=0 rev="" label age stale source
   line=$(status_line "$main" "$path"); IFS=$'\t' read -r _ branch dirty unpushed pr prhead lock live <<<"$line"
   head=$(git -C "$path" rev-parse HEAD); int=$(integration "$main"); stale=$(( $(cfg stale "$main" 24) * 3600 )); remotes_resolve "$main"
   if [[ "$branch" == "(detached)" ]] && is_review "$path"; then rev=$(review_branch_of "$path"); review=1; fi
@@ -1921,6 +1938,8 @@ remove_one() {
     [[ "$pr" == MERGED || "$pr" == CLOSED ]] && ghmerged=1
   fi
   if [[ $force == 0 ]]; then   # each keep has a stable code (docs/snapshot.md) and the reason gc has always logged
+    source=$(gcfg onetree.source || true)
+    [[ -n "$source" && "$(real "$source")" == "$(real "$path")" ]] && { gc_out keep install-source "configured onetree.source"; return 1; }
     local owner; [[ $explicit == 0 ]] && owner=$(foreign_owner "$main" "$path") && { gc_out keep foreign "made by $owner, which removes it itself"; return 1; }
     owners_backfill "$path"
     [[ "$lock" != - ]]      && { gc_out keep locked "$lock"; return 1; }
@@ -2062,11 +2081,92 @@ gc_scan_error() {
   printf 'onetree: gc cannot inspect %s: %s\n' "$1" "$2" >&2
   failed_paths+=("$1")
 }
+GC_LOCK_TOKEN=
+gc_lock_release() {
+  local token="${GC_LOCK_TOKEN:-}" held=""
+  [[ -n "$token" && -f "$GC_LOCK/owner" ]] || return 0
+  IFS=$'\t' read -r held _ < "$GC_LOCK/owner" || true
+  [[ "$held" == "$token" ]] && { rm -f "$GC_LOCK/owner"; rmdir "$GC_LOCK" 2>/dev/null || true; }
+  GC_LOCK_TOKEN=
+}
+gc_lock_acquire() {
+  local token newtoken pid start held="" hpid="" hstart="" age recover="$GC_LOCK.recover" quarantine
+  mkdir -p "$(dirname "$GC_LOCK")" || return 1
+  newtoken=$(od -An -N8 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n'); [[ -n "$newtoken" ]] || return 1
+  pid=$$; start=$(ps -o lstart= -p "$pid" 2>/dev/null || true)
+  if mkdir "$GC_LOCK" 2>/dev/null; then
+    if printf '%s\t%s\t%s\n' "$newtoken" "$pid" "$start" > "$GC_LOCK/owner"; then GC_LOCK_TOKEN=$newtoken; return 0; fi
+    rm -f "$GC_LOCK/owner"; rmdir "$GC_LOCK" 2>/dev/null || true; return 1
+  fi
+  age=$(( $(date +%s) - $(mtime "$GC_LOCK") ))
+  if [[ -s "$GC_LOCK/owner" ]]; then
+    IFS=$'\t' read -r held hpid hstart < "$GC_LOCK/owner" || return 1
+    if [[ "$hpid" =~ ^[0-9]+$ ]] && kill -0 "$hpid" 2>/dev/null && [[ "$(ps -o lstart= -p "$hpid" 2>/dev/null || true)" == "$hstart" ]]; then return 75; fi
+  else [[ $age -ge 30 ]] || return 75
+  fi
+  if ! mkdir "$recover" 2>/dev/null; then
+    age=$(( $(date +%s) - $(mtime "$recover") ))
+    [[ $age -lt 300 ]] && return 75
+    rmdir "$recover" 2>/dev/null || return 75
+    mkdir "$recover" 2>/dev/null || return 75
+  fi
+  if [[ -n "$held" ]]; then
+    [[ -s "$GC_LOCK/owner" ]] || { rmdir "$recover" 2>/dev/null || true; return 75; }
+    IFS=$'\t' read -r token hpid hstart < "$GC_LOCK/owner" || { rmdir "$recover" 2>/dev/null || true; return 1; }
+    if [[ "$token" != "$held" ]] || { [[ "$hpid" =~ ^[0-9]+$ ]] && kill -0 "$hpid" 2>/dev/null && [[ "$(ps -o lstart= -p "$hpid" 2>/dev/null || true)" == "$hstart" ]]; }; then
+      rmdir "$recover" 2>/dev/null || true; return 75
+    fi
+  else
+    age=$(( $(date +%s) - $(mtime "$GC_LOCK") ))
+    [[ ! -s "$GC_LOCK/owner" && $age -ge 30 ]] || { rmdir "$recover" 2>/dev/null || true; return 75; }
+  fi
+  quarantine="$GC_LOCK.stale.$$.${held:-uninitialized}"
+  if ! mv "$GC_LOCK" "$quarantine" 2>/dev/null; then rmdir "$recover" 2>/dev/null || true; return 75; fi
+  token=""; [[ -s "$quarantine/owner" ]] && IFS=$'\t' read -r token _ < "$quarantine/owner"
+  if [[ "$token" != "$held" ]]; then
+    [[ ! -e "$GC_LOCK" ]] && mv "$quarantine" "$GC_LOCK" 2>/dev/null || true
+    rmdir "$recover" 2>/dev/null || true; return 75
+  fi
+  rm -rf "$quarantine"; rmdir "$recover" 2>/dev/null || true
+  if ! mkdir "$GC_LOCK" 2>/dev/null; then return 75; fi
+  if printf '%s\t%s\t%s\n' "$newtoken" "$pid" "$start" > "$GC_LOCK/owner"; then GC_LOCK_TOKEN=$newtoken; return 0; fi
+  rm -f "$GC_LOCK/owner"; rmdir "$GC_LOCK" 2>/dev/null || true; return 1
+}
+gc_status_due() {
+  local mode=$1 hash=$2 now; now=$(date +%s)
+  [[ -f "$GC_RESULT" ]] || return 0
+  ! jq -e --arg mode "$mode" --arg hash "$hash" --argjson now "$now" '
+    (.t | type) == "number" and .t <= $now and .mode == $mode and .registryHash == $hash
+    and (if .status == 0 and (.incomplete // false) == false then .t > ($now - 3600)
+         elif (.incomplete // false) == true and (.cursor // 0) > 0 then .t > ($now - 3600)
+         else .t > ($now - 900) end)' "$GC_RESULT" >/dev/null 2>&1
+}
+gc_deadline_reached() { [[ -n "${ONETREE_GC_DEADLINE:-}" && $(date +%s) -ge $ONETREE_GC_DEADLINE ]]; }
+maybe_opportunistic_gc() {
+  local trigger=$1 mode hash host repo script rc=0
+  mode=$(gc_mode); [[ "$mode" == opportunistic ]] || return 0
+  [[ -z "${ONETREE_GC_ATTEMPTED:-}${ONETREE_SCHEDULED:-}${CI:-}" ]] || return 0
+  session_noninteractive && return 0
+  host=$(host_of); [[ "$host" != claude-sdk ]] || return 0
+  hash=$(gc_registry_hash); gc_status_due "$mode" "$hash" || return 0
+  mkdir -p "$(dirname "$GC_RESULT")" 2>/dev/null || { printf 'onetree: opportunistic gc skipped: state directory is not writable\n' >&2; return 0; }
+  lsof -a -p $$ -d cwd -Fn 2>/dev/null | grep -q '^n' || { printf 'onetree: opportunistic gc skipped: %s cannot inspect its current process\n' "${host:-this host}" >&2; return 0; }
+  repo=$(git config -f "$CFG" --get-all onetree.repo 2>/dev/null | head -1 || true); repo=$(tilde "$repo")
+  [[ -z "$repo" || -d "$repo" ]] || { printf 'onetree: opportunistic gc skipped: %s cannot access %s\n' "${host:-this host}" "$repo" >&2; return 0; }
+  ONETREE_GC_ATTEMPTED=1
+  printf 'onetree: cleaning up merged worktrees (up to 20s)...\n' >&2
+  script=$(realfile "$0")
+  ( cd "$HOME" && unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES &&
+    ONETREE_GC_CONTEXT=opportunistic ONETREE_GC_TRIGGER="$trigger" ONETREE_GC_HOST="${host:-terminal}" \
+    ONETREE_GC_DEADLINE=$(( $(date +%s) + 20 )) ONETREE_GC_ATTEMPTED=1 "$script" gc --all ) >> "$GC_LOG" 2>&1 || rc=$?
+  [[ $rc == 0 || $rc == 75 ]] || printf 'onetree: opportunistic gc did not complete; see %s (the requested command will continue)\n' "$GC_LOG" >&2
+  return 0
+}
 # registry selection is kept here so other --all commands retain their behavior.
 # target dry fresh — fetch every main at once and warm the PR cache, then one verdict per worktree and one per main; a dry run
 # judges the worktrees at once
 gc_run() {
-  local target=$1 dry=$2 fresh=$3 m w mains active="" paths err rc
+  local target=$1 dry=$2 fresh=$3 m w mains active="" paths err rc repo_index=0
   if [[ "$target" == --all ]]; then
     if mains=$(git config -f "$CFG" --get-all onetree.repo 2>&1); then :
     else
@@ -2088,10 +2188,14 @@ gc_run() {
   mains=${active%$'\n'}
   [[ -n "$mains" ]] || return 0
   [[ $fresh == 1 ]] && fresh_caches "$mains"
-  lsof_prime; fetch_all "$mains"; prefetch_prs "$mains"
+  gc_deadline_reached && { incomplete=true; return 0; }
+  lsof_prime; fetch_all "$mains"; gc_deadline_reached && { incomplete=true; return 0; }; prefetch_prs "$mains"
+  gc_deadline_reached && { incomplete=true; return 0; }
   if [[ $dry == 1 ]]; then each_main "$mains" verdicts_of; return 0; fi   # verdicts only: every repo at once
   while IFS= read -r m; do   # removals and parks one at a time
     [[ -n "$m" ]] || continue
+    repo_index=$((repo_index+1)); [[ $repo_index -le $cursor ]] && continue
+    gc_deadline_reached && { incomplete=true; cursor=$((repo_index-1)); return 0; }
     if [[ "$target" == --all ]]; then
       if ! paths=$(gc_worktrees "$m"); then
         accessible=$((accessible-1)); gc_scan_error "$m" 'worktree scan failed'; continue
@@ -2101,33 +2205,44 @@ gc_run() {
     cfg_dump "$m"; integration "$m" >/dev/null
     while IFS= read -r w; do
       [[ -n "$w" ]] || continue
-      evaluated=$((evaluated+1)); remove_one "$m" "$w" 0 0 || true
+      gc_deadline_reached && { incomplete=true; cursor=$((repo_index-1)); return 0; }
+      evaluated=$((evaluated+1)); trap '' INT HUP QUIT; remove_one "$m" "$w" 0 0 || true; trap - INT HUP QUIT
     done <<<"$paths"
-    park_one "$m" 0 || true
+    trap '' INT HUP QUIT; park_one "$m" 0 || true; trap - INT HUP QUIT
+    progress=$((progress+1)); cursor=$repo_index
   done <<<"$mains"
+  incomplete=false; cursor=0; last_complete=$(date +%s)
 }
 verdicts_of() { cfg_dump "$1"; integration "$1" >/dev/null; each_worktree "$1" verdict_of; park_one "$1" 1 || true; }
 gc_finish() {
-  local rc=$1 failed result_tmp scheduled=false
+  local rc=$1 failed result_tmp scheduled=false automated=false mode context host
   [[ -z "$tmp" ]] || rm -f "$tmp"
+  gc_lock_release
   [[ "$dry" == 0 ]] || return 0
   local counts=()
   if [[ "$target" == --all ]]; then
     failed=$(jq -cn '$ARGS.positional' --args "${failed_paths[@]}")
-    if [[ "${ONETREE_SCHEDULED:-}" == 1 ]]; then
-      scheduled=true
+    context=${ONETREE_GC_CONTEXT:-}; [[ "${ONETREE_SCHEDULED:-}" == 1 ]] && context=scheduled
+    mode=$(gc_mode); host=${ONETREE_GC_HOST:-${context:-manual}}
+    case "$context" in scheduled|opportunistic) automated=true ;; esac
+    [[ "$context" == scheduled ]] && scheduled=true
+    if [[ "$automated" == true && "$mode" == "$context" ]]; then
       if mkdir -p "$(dirname "$GC_RESULT")" && result_tmp=$(mktemp "$GC_RESULT.XXXXXX") &&
-        jq -cn --argjson t "$(date +%s)" --argjson status "$rc" --argjson configured "$configured" \
-          --argjson accessible "$accessible" --argjson failedPaths "$failed" '$ARGS.named' > "$result_tmp" &&
+        jq -cn --argjson t "$(date +%s)" --argjson status "$rc" --arg mode "$context" \
+          --arg trigger "${ONETREE_GC_TRIGGER:-timer}" --arg host "$host" --arg registryHash "$registry_hash" \
+          --argjson configured "$configured" --argjson accessible "$accessible" --argjson failedPaths "$failed" \
+          --argjson incomplete "$incomplete" --argjson cursor "$cursor" --argjson cycleStarted "$cycle_started" \
+          --argjson lastComplete "$last_complete" '$ARGS.named' > "$result_tmp" &&
         mv -f "$result_tmp" "$GC_RESULT"; then :
       else
         [[ -z "${result_tmp:-}" ]] || rm -f "$result_tmp"
-        printf 'onetree: cannot write scheduled gc result to %s\n' "$GC_RESULT" >&2
+        printf 'onetree: cannot write automated gc result to %s\n' "$GC_RESULT" >&2
         rc=1
       fi
     fi
     counts=("scheduled:=$scheduled" "status:=$rc" "configured:=$configured" "accessible:=$accessible"
-      "evaluated:=$evaluated" "errors:=${#failed_paths[@]}" "failedPaths:=$failed")
+      "evaluated:=$evaluated" "errors:=${#failed_paths[@]}" "failedPaths:=$failed" "mode=${context:-manual}"
+      "trigger=${ONETREE_GC_TRIGGER:-manual}" "host=$host" "registryHash=$registry_hash" "incomplete:=$incomplete")
   fi
   log_event gc-run "target=${target:-cwd}" "kept:=$GC_KEPT" "removed:=$GC_REMOVED" "parked:=$GC_PARKED" \
     "fastForwarded:=$GC_FF" "seconds:=$(( $(date +%s) - t0 ))" "${counts[@]}"
@@ -2135,8 +2250,25 @@ gc_finish() {
 }
 cmd_gc() (
   local dry=0 json=0 fresh=0 target="" a t0 tmp="" configured=0 accessible=0 evaluated=0 failed_paths=()
+  local incomplete=false cursor=0 progress=0 cycle_started last_complete=0 registry_hash context lock_rc=0
   for a in "$@"; do case "$a" in --dry-run) dry=1 ;; --json) json=1 ;; --fresh) fresh=1 ;; *) target=$a ;; esac; done
+  context=${ONETREE_GC_CONTEXT:-}; [[ "${ONETREE_SCHEDULED:-}" == 1 ]] && context=scheduled
+  [[ "$context" != scheduled || "$(gc_mode)" == scheduled ]] || exit 0
   t0=$(date +%s)
+  cycle_started=$t0; registry_hash=$(gc_registry_hash)
+  if [[ "$context" == opportunistic && -f "$GC_RESULT" ]]; then
+    cursor=$(jq -r --arg h "$registry_hash" 'if .registryHash == $h and .incomplete == true then (.cursor // 0) else 0 end' "$GC_RESULT" 2>/dev/null || echo 0)
+    cycle_started=$(jq -r --arg h "$registry_hash" --argjson now "$t0" 'if .registryHash == $h and .incomplete == true then (.cycleStarted // $now) else $now end' "$GC_RESULT" 2>/dev/null || echo "$t0")
+    last_complete=$(jq -r --arg h "$registry_hash" 'if .registryHash == $h then (.lastComplete // 0) else 0 end' "$GC_RESULT" 2>/dev/null || echo 0)
+  fi
+  if [[ $dry == 0 ]]; then
+    gc_lock_acquire || lock_rc=$?
+    if [[ $lock_rc != 0 ]]; then
+      [[ $lock_rc == 75 && "$context" == opportunistic ]] && exit 75
+      [[ $lock_rc == 75 ]] && printf 'onetree: gc already in progress\n' >&2 || printf 'onetree: cannot acquire gc lock %s\n' "$GC_LOCK" >&2
+      exit "$lock_rc"
+    fi
+  fi
   trap 'gc_finish "$?"' EXIT
   if [[ $json == 1 ]]; then
     # no pipeline, so the tallies survive
@@ -2145,6 +2277,7 @@ cmd_gc() (
     gc_run "$target" "$dry" "$fresh"
   fi
   [[ ${#failed_paths[@]} == 0 ]] || exit 1
+  [[ "$incomplete" == false ]] || exit 1
   exit 0
 )
 
@@ -2360,6 +2493,7 @@ cmd_launch() {
   [[ "${1:-}" == --task ]] && { task=${2:?launch: --task needs a slug}; shift 2; }
   agent=${1:?launch: claude, codex, pi or dsh}; shift
   case "$agent" in claude|codex|pi|dsh) ;; *) die "launch: claude, codex, pi or dsh, not $agent" ;; esac
+  maybe_opportunistic_gc launch
   if [[ -n "$task" ]]; then
     p=$(cmd_new "$task") || die "launch: no worktree, so $agent was not started"
   else
@@ -2377,6 +2511,7 @@ cmd_launch() {
     while IFS= read -r x; do pre+=("$x"); done < <(codex_grants "$p")
     export GIT_CONFIG_PARAMETERS="${GIT_CONFIG_PARAMETERS:+$GIT_CONFIG_PARAMETERS }$CODEX_GIT"
   fi
+  unset ONETREE_GC_ATTEMPTED ONETREE_GC_CONTEXT ONETREE_GC_TRIGGER ONETREE_GC_HOST ONETREE_GC_DEADLINE
   cd "$p" && exec "$agent" ${pre[@]+"${pre[@]}"} "$@"
 }
 claude_trusts() {  # <dir> — Claude accepted its trust dialog for this main checkout (exact path only)
@@ -2642,7 +2777,8 @@ $( [[ $g == 1 ]] && printf 'The main checkout `%s` is a read-only mirror: a hook
   (\`cd <path> && git …\`), not through \`-C\` or \`GIT_DIR\` overrides.
 - **Shipping:** $ship Never merge locally, never push to \`$int\`, never force-push.
   \`git fetch\` before every commit and every push; if the base moved, rebase and re-run the gates.
-- **Done:** when the PR is merged say "worktree \`<path>\` is done" and stop. \`onetree gc\` runs hourly and removes a
+- **Done:** when the PR is merged say "worktree \`<path>\` is done" and stop. \`onetree gc\` runs automatically
+  (hourly in scheduled mode, or from eligible attended commands in opportunistic mode) and removes a
   worktree only when it is clean, unlocked, idle, and its PR is merged at the worktree's head (or it holds no
   commits beyond \`$int\` and is older than $(cfg stale "$main" 24)h). A worktree another tool made is left to it.
 EOS
@@ -2788,7 +2924,8 @@ own AGENTS.md or CLAUDE.md can add to these rules; it cannot relax them.
   `git fetch` before every commit and every push; if the base moved, rebase and
   re-run the gates.
 - **Done:** when the PR is merged say "worktree `<path>` is done" and stop.
-  `onetree gc` runs hourly. It removes a worktree only when it is clean, unlocked
+  `onetree gc` runs automatically (hourly in scheduled mode, or from eligible attended commands in opportunistic
+  mode). It removes a worktree only when it is clean, unlocked
   and no process is sitting in it, and either its PR is merged at the
   worktree's current head, its PR was closed and every commit is already
   pushed (past the stale window), or it holds no commits beyond the integration
@@ -3320,8 +3457,21 @@ codex_trust() {  # -> "key<TAB>hash<TAB>trusted hash" for each onetree hook in ~
   done
 }
 codex_trusted() { local rows; rows=$(codex_trust) && [[ -n "$rows" ]] && ! awk -F'\t' '$2 != $3 { bad = 1 } END { exit !bad }' <<<"$rows"; }
+uninstall_gc_job() {
+  if [[ "$(uname)" == Darwin ]]; then
+    launchctl bootout "gui/$(id -u)/com.onetree.gc" 2>/dev/null || true
+    rm -f "$PLIST"
+  else
+    { crontab -l 2>/dev/null | grep -v 'onetree gc --all' || true; } | crontab - 2>/dev/null || true
+  fi
+}
 install_gc() {
   local path; path="$(dirname "$BIN"):$PATH"
+  if [[ "$(gc_mode)" == opportunistic ]]; then
+    uninstall_gc_job
+    echo "gc: opportunistic, on eligible interactive new/launch commands (log $GC_LOG)"
+    return 0
+  fi
   if [[ "$(uname)" == Darwin ]]; then
     mkdir -p "$(dirname "$PLIST")" "$HOME/Library/Logs"
     launchctl bootout "gui/$(id -u)/com.onetree.gc" 2>/dev/null || true
@@ -3354,7 +3504,12 @@ EOS
   fi
 }
 cmd_install() {
-  local src; src=$(realfile "$0"); mkdir -p "$(dirname "$BIN")" "$(dirname "$CFG")"
+  local src requested old a switched=0; requested=$(gc_mode); old=$requested
+  while [[ $# -gt 0 ]]; do a=$1; shift; case "$a" in --gc-mode) requested=${1:?install: --gc-mode needs scheduled or opportunistic}; shift ;; *) die "install: unknown option $a" ;; esac; done
+  gc_mode_valid "$requested" || die "install: --gc-mode must be scheduled or opportunistic, not $requested"
+  gc_mode_valid "$old" || die "invalid onetree.gcMode=$old in $CFG; set scheduled or opportunistic"
+  src=$(realfile "$0"); mkdir -p "$(dirname "$BIN")" "$(dirname "$CFG")"
+  if [[ "$requested" != "$old" ]]; then uninstall_gc_job; git config -f "$CFG" onetree.gcMode "$requested"; switched=1; fi
   if [[ "$src" != "$BIN" ]]; then   # a copy, not a symlink: launchd/cron may not be allowed into ~/Documents or similar
     rm -f "$BIN"; cp "$src" "$BIN"; chmod +x "$BIN"; git config -f "$CFG" onetree.source "$(dirname "$(dirname "$src")")"; echo "installed $BIN (copied from $src; \`onetree update\` pulls and re-copies)"; fi
   for t in git jq gh lsof; do command -v "$t" >/dev/null || echo "WARNING: $t not found; install it (gh: PR state for gc; lsof: live-process check)"; done
@@ -3378,13 +3533,14 @@ cmd_install() {
   done
   echo "shell: ~/.onetree-agents.sh sourced from ~/.zshrc$([[ -f "$HOME/.bashrc" ]] && printf ' and ~/.bashrc') (claude/codex/pi/dsh started in a guarded mirror get a worktree; creation failure refuses to start; other shells and programs: onetree launch)"
   install_gc
+  [[ $switched == 1 && "$requested" == opportunistic ]] && ONETREE_GC_ATTEMPTED='' maybe_opportunistic_gc install
   case ":$PATH:" in *":$(dirname "$BIN"):"*) ;; *) echo "NOTE: add $(dirname "$BIN") to PATH";; esac
   echo "done. next: cd <repo> && onetree init --guard   (or --no-guard);  onetree doctor"
 }
 cmd_uninstall() {
   local m f
   while IFS= read -r m; do [[ -n "$m" ]] || continue; guarded "$m" && unlock_main "$m" || true; done < <(repos_all)
-  if [[ "$(uname)" == Darwin ]]; then launchctl bootout "gui/$(id -u)/com.onetree.gc" 2>/dev/null || true; rm -f "$PLIST"; else crontab -l 2>/dev/null | grep -v 'onetree gc --all' | crontab - || true; fi
+  uninstall_gc_job
   hook_json "$HOME/.claude/settings.json" remove; [[ -f "$HOME/.codex/hooks.json" ]] && hook_json "$HOME/.codex/hooks.json" remove
   strip_block "$HOME/.claude/CLAUDE.md"; strip_block "$HOME/.codex/AGENTS.md"; strip_block "$HOME/.pi/agent/AGENTS.md"; strip_block "$HOME/.dsh/AGENTS.md"
   rm -f "$HOME/.pi/agent/extensions/onetree.ts" "$HOME/.dsh/onetree-plugin.mjs"
@@ -3415,10 +3571,14 @@ cmd_update() {
 }
 # ---- doctor: checks that install worked and still holds
 gc_result_healthy() {
-  jq -e --argjson now "$(date +%s)" '
-    (.t | type) == "number" and .t <= $now and .t >= ($now - 7200)
+  local mode=${1:-$(gc_mode)}
+  jq -e --arg mode "$mode" --arg hash "$(gc_registry_hash)" --argjson now "$(date +%s)" '
+    .mode == $mode and .registryHash == $hash
+    and ((if $mode == "opportunistic" then .lastComplete else .t end) | type) == "number"
+    and (if $mode == "opportunistic" then .lastComplete else .t end) <= $now
+    and (if $mode == "opportunistic" then .lastComplete else .t end) >= ($now - 7200)
     and .status == 0 and (.configured | type) == "number" and .configured >= 0
-    and .configured == .accessible and .failedPaths == []
+    and .configured == .accessible and .failedPaths == [] and (.incomplete // false) == false
   ' "$GC_RESULT"
 }
 cmd_doctor() {
@@ -3454,7 +3614,7 @@ cmd_doctor() {
   # what install wrote, against what this onetree and its source would write now
   local src f; src=$(gcfg onetree.source || true)
   [[ -n "$src" && -f "$src/bin/onetree" ]] && chk "installed onetree is the one in $src (if not: onetree update)" "cmp -s '$BIN' '$src/bin/onetree'"
-  [[ -n "$src" && -d "$src/.git" ]] && chk "$src has no fetched commits left to pull, as of its last fetch (onetree gc fetches registered repos hourly; if it has: onetree update)" "[[ \$(git -C '$src' rev-list --count 'HEAD..@{u}' 2>/dev/null || echo 0) == 0 ]]"
+  [[ -n "$src" && -d "$src/.git" ]] && chk "$src has no fetched commits left to pull, as of its last gc fetch (if it has: onetree update)" "[[ \$(git -C '$src' rev-list --count 'HEAD..@{u}' 2>/dev/null || echo 0) == 0 ]]"
   chk "shell wrappers are what this onetree writes (if not: onetree update)" "cmp -s '$WRAPPERS' <(render_wrappers)"
   [[ -d "$HOME/.pi/agent" ]] && chk "pi extension is what this onetree writes (if not: onetree update)" "cmp -s '$HOME/.pi/agent/extensions/onetree.ts' <(render_pi_extension)"
   [[ -d "$HOME/.dsh" ]] && chk "dsh plugin is what this onetree writes (if not: onetree update)" "cmp -s '$HOME/.dsh/onetree-plugin.mjs' <(render_dsh_plugin)"
@@ -3466,9 +3626,15 @@ cmd_doctor() {
     case $a in claude) d=$HOME/.claude ;; codex) d=$HOME/.codex ;; pi) d=$HOME/.pi/agent ;; dsh) d=$HOME/.dsh ;; esac
     [[ -d "$d" ]] && chk "$a on PATH starts (\`$a --version\`), so its shell wrapper can start it in a worktree" "bounded 10 $a --version </dev/null"
   done
-  if [[ "$(uname)" == Darwin ]]; then
+  local gcm; gcm=$(gc_mode)
+  chk "gc mode is scheduled or opportunistic" "gc_mode_valid '$gcm'"
+  if [[ "$gcm" == opportunistic ]]; then
+    if [[ "$(uname)" == Darwin ]]; then chk "scheduled gc job absent in opportunistic mode" "! launchctl print gui/$(id -u)/com.onetree.gc";
+    else chk "scheduled gc job absent in opportunistic mode" "! crontab -l 2>/dev/null | grep -q ' onetree gc --all'"; fi
+    chk "opportunistic gc covered all registered repos in the last 2h (see $GC_RESULT; host is recorded there)" "gc_result_healthy opportunistic"
+  elif [[ "$(uname)" == Darwin ]]; then
     chk "gc job loaded (launchd com.onetree.gc)" "launchctl print gui/$(id -u)/com.onetree.gc"
-    chk "scheduled gc covered all registered repos in the last 2h (see $GC_RESULT and ~/Library/Logs/onetree.log)" gc_result_healthy
+    chk "scheduled gc covered all registered repos in the last 2h (see $GC_RESULT and ~/Library/Logs/onetree.log)" "gc_result_healthy scheduled"
   else chk "gc job in crontab" "crontab -l | grep -q ' onetree gc --all'"
   fi
   chk "guard blocks a mutation in a guarded mirror (skipped when none registered)" '[[ -z "$(guarded_mains)" ]] || ! printf "{\"tool_name\":\"Bash\",\"cwd\":\"%s\",\"tool_input\":{\"command\":\"git stash\"}}" "$(guarded_mains | head -1)" | ONETREE_NO_EVENTS=1 "$G" guard 2>/dev/null'
@@ -4450,7 +4616,7 @@ case "${1:-}" in
   info) shift; cmd_info "$@" ;;
   snippet) shift; cmd_snippet "$@" ;;
   guard) cmd_guard ;;
-  install) cmd_install ;;
+  install) shift; cmd_install "$@" ;;
   update) cmd_update ;;
   uninstall) cmd_uninstall ;;
   doctor) shift; cmd_doctor "$@" ;;

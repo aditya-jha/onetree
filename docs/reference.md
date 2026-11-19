@@ -773,15 +773,28 @@ server; Node 22.6+ is the only extra requirement. See
   `launchctl bootstrap` command that loads it, and exits non-zero, which fails
   `onetree update` too. `ONETREE_LAUNCHD_WAIT` sets the wait between tries in
   seconds (default 1).
-- On macOS `onetree doctor` requires a complete scheduled GC result from the
-  last two hours. See `~/.local/state/onetree/gc-status.json` for scan coverage
-  and `~/Library/Logs/onetree.log` for errors. Give the hourly job time to
-  complete after installing, updating or waking the machine.
+- `onetree install --gc-mode scheduled|opportunistic` sets the machine-wide
+  `onetree.gcMode` key. `scheduled` is the default and installs launchd/cron.
+  `opportunistic` removes that job and runs GC from eligible attended
+  `onetree new` and `onetree launch` commands. A complete run is reused for one
+  hour; failures back off for 15 minutes. The interactive run has a cooperative
+  20-second budget, resumes later when needed, logs to
+  `~/.local/state/onetree/gc.log`, and never changes the primary command's exit
+  status. CI, Claude print/SDK, Codex exec, hooks, `carry`, `auto`, and `session`
+  do not trigger it.
+- On macOS `onetree doctor` requires a complete same-mode GC cycle from the
+  last two hours. Automated health in `~/.local/state/onetree/gc-status.json`
+  records the mode, trigger, host, configured-repo fingerprint, access
+  coverage, failures, completion state and resume cursor. In opportunistic
+  mode doctor also requires the scheduler to be absent.
 - macOS privacy controls can deny launchd access to repositories or worktrees
   in protected folders such as `~/Documents`, even when interactive GC works.
   For unattended cleanup, keep the main checkout and its worktrees outside
   protected folders (for example under `~/src` and `~/worktrees`). When moving
   a checkout, repair its Git worktree links and update its onetree registration.
+- Every mutating GC command takes one machine lock. An opportunistic trigger
+  skips a busy lock; a manual command exits 75 and reports that GC is already
+  running. GC never removes the checkout named by `onetree.source`.
 - `onetree new` checks files out with one worker per core
   (`checkout.workers=0`): on a repo with 29k tracked files (2.8 GB) that takes
   the checkout from 8.7 s to 4.3 s. Repos under 100 files check out serially.

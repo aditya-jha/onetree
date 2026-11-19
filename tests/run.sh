@@ -1533,6 +1533,12 @@ json_is "install: onetree owns handlers, not groups: the user's handler sharing 
 mkdir -p "$HOME/.dsh"; printf -- '- id: webserver\n  config: {}\n' > "$HOME/.dsh/cordis.patch.yml"
 PATH="$WRAP_INSTALL_BIN:$PATH" $ONETREE install >/dev/null; PATH="$WRAP_INSTALL_BIN:$PATH" $ONETREE install >/dev/null
 eq "install (Linux): one hourly gc job in the crontab, however often install runs" "$(grep -c 'onetree gc --all' "$HOME/fake-crontab")" 1
+out=$(CI=1 PATH="$WRAP_INSTALL_BIN:$PATH" $ONETREE install --gc-mode opportunistic)
+eq "install (Linux): opportunistic mode is persisted and removes the scheduled job" \
+  "$(git config -f "$ONETREE_CONFIG" --get onetree.gcMode) $(grep -c 'onetree gc --all' "$HOME/fake-crontab" || true) $(grep -c '^gc: opportunistic' <<<"$out")" 'opportunistic 0 1'
+CI=1 PATH="$WRAP_INSTALL_BIN:$PATH" $ONETREE install --gc-mode scheduled >/dev/null
+eq "install (Linux): switching back to scheduled restores exactly one job" \
+  "$(git config -f "$ONETREE_CONFIG" --get onetree.gcMode) $(grep -c 'onetree gc --all' "$HOME/fake-crontab")" 'scheduled 1'
 eq "install: dsh gets onetree's plugin and one managed insert row, the user's own rows kept, however often install runs" \
   "$(grep -c 'id: onetree' "$HOME/.dsh/cordis.patch.yml") $(grep -c 'id: webserver' "$HOME/.dsh/cordis.patch.yml") $(grep -cF "name: '$HOME/.dsh/onetree-plugin.mjs'" "$HOME/.dsh/cordis.patch.yml") $(grep -cF "\"$HOME/.local/bin/onetree\"" "$HOME/.dsh/onetree-plugin.mjs")" "1 1 1 1"
 rm -rf "$HOME/.dsh"
@@ -1883,12 +1889,12 @@ chmod +x "$TMP/gc-bin/uname" "$TMP/gc-bin/launchctl"
 result=$HOME/.local/state/onetree/gc-status.json
 gc_err=$TMP/gc.err
 gc_health() {
-  PATH="$TMP/gc-bin:$PATH" doctor_json | jq -c '[.checks[] | select(.name | startswith("scheduled gc covered")) | .ok]'
+  ONETREE_CONFIG=${1:-$ONETREE_CONFIG} PATH="$TMP/gc-bin:$PATH" doctor_json | jq -c '[.checks[] | select(.name | startswith("scheduled gc covered")) | .ok]'
 }
 eq "doctor: a loaded job without a scheduled result is unhealthy" "$(gc_health)" '[false]'
 ONETREE_CONFIG=$TMP/no-registry ONETREE_NO_EVENTS=1 ONETREE_SCHEDULED=1 $ONETREE gc --all >/dev/null
 eq "scheduled gc: an empty registry is healthy even when event logging is disabled" \
-  "$(gc_health) $(jq -c '[.status,.configured,.accessible,.failedPaths]' "$result")" '[true] [0,0,0,[]]'
+  "$(gc_health "$TMP/no-registry") $(jq -c '[.status,.configured,.accessible,.failedPaths]' "$result")" '[true] [0,0,0,[]]'
 
 linked="$TMP/linked parent/linked with spaces"; mkdir -p "$(dirname "$linked")"
 git -C "$MAIN" worktree add -q --detach "$linked" HEAD
@@ -1942,6 +1948,53 @@ jq '.t -= 7201' "$result" > "$TMP/stale-result"; mv "$TMP/stale-result" "$result
 eq "doctor: a successful but stale scheduled scan is unhealthy" "$(gc_health)" '[false]'
 printf 'invalid json\n' > "$result"
 eq "doctor: a malformed scheduled result is unhealthy" "$(gc_health)" '[false]'
+
+# ---- opportunistic gc runs only from eligible interactive commands, under the shared lock
+git config -f "$ONETREE_CONFIG" onetree.gcMode opportunistic
+rm -f "$result"
+before=$($ONETREE events --kind gc-run --json -n 0 | jq 'length')
+out=$(env -u CI ONETREE_HOST=codex-cli "$ONETREE" new opportunistic-gc-one "$MAIN" 2>"$TMP/opportunistic.err")
+after=$($ONETREE events --kind gc-run --json -n 0 | jq 'length')
+expected="$TMP/worktrees/$(basename "$MAIN")/opportunistic-gc-one 1 opportunistic"$'\t'new$'\t'codex-cli$'\t'0$'\t'false$'\t'true$'\t'true
+eq "opportunistic gc: explicit new keeps stdout path-pure and records a complete host-attributed run" \
+  "$out $((after-before)) $(jq -r '[.mode,.trigger,.host,.status,.incomplete,.configured == .accessible,.failedPaths == []] | @tsv' "$result")" \
+  "$expected"
+before=$after
+env -u CI ONETREE_HOST=codex-cli "$ONETREE" new opportunistic-gc-two "$MAIN" >/dev/null 2>"$TMP/opportunistic-second.err"
+after=$($ONETREE events --kind gc-run --json -n 0 | jq 'length')
+eq "opportunistic gc: a second new inside the one-hour TTL does not scan again" "$((after-before)) $(grep -c 'cleaning up merged' "$TMP/opportunistic-second.err" || true)" '0 0'
+
+source_tree=$out
+git config -f "$ONETREE_CONFIG" onetree.source "$source_tree"
+touch -t 200001010000 "$source_tree/.git"
+json=$($ONETREE gc "$MAIN" --dry-run --json)
+eq "gc: the configured install source is retained even when it would otherwise be eligible" \
+  "$(jq -r --arg p "$source_tree" '.[] | select(.path == $p) | .gc.code' <<<"$json")" install-source
+
+previous=$(cat "$result")
+$ONETREE gc --all >/dev/null
+eq "opportunistic gc: a successful manual gc cannot mask automated health" "$(cmp -s "$result" <(printf '%s\n' "$previous") && echo same)" same
+
+mkdir -p "$HOME/.local/state/onetree/gc.lock"
+printf 'held\t%s\t%s\n' "$$" "$(ps -o lstart= -p $$)" > "$HOME/.local/state/onetree/gc.lock/owner"
+rc=0; $ONETREE gc --all >/dev/null 2>"$TMP/gc-busy.err" || rc=$?
+eq "gc lock: a live holder makes manual gc fail distinctly without changing health" \
+  "$rc $(grep -c 'gc already in progress' "$TMP/gc-busy.err") $(cmp -s "$result" <(printf '%s\n' "$previous") && echo same)" '75 1 same'
+rm -f "$HOME/.local/state/onetree/gc.lock/owner"; rmdir "$HOME/.local/state/onetree/gc.lock"
+
+mkdir -p "$HOME/.local/state/onetree/gc.lock"
+printf 'dead\t999999\told process\n' > "$HOME/.local/state/onetree/gc.lock/owner"
+$ONETREE gc --all >/dev/null
+eq "gc lock: a dead owner is recovered and the replacement lock is released" \
+  "$([[ -e "$HOME/.local/state/onetree/gc.lock" ]] && echo left || echo gone)" gone
+mkdir -p "$HOME/.local/state/onetree/gc.lock"; touch -t 200001010000 "$HOME/.local/state/onetree/gc.lock"
+$ONETREE gc --all >/dev/null
+eq "gc lock: an old lock whose owner record was never written is recovered" \
+  "$([[ -e "$HOME/.local/state/onetree/gc.lock" ]] && echo left || echo gone)" gone
+
+ONETREE_SCHEDULED=1 $ONETREE gc --all >/dev/null
+eq "opportunistic gc: a stale scheduled process exits without overwriting health" \
+  "$(cmp -s "$result" <(printf '%s\n' "$previous") && echo same)" same
 
 # ==== end
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

@@ -6,6 +6,14 @@
   the two high severity `npm audit` warnings shown during worktree bootstrap.
   Both are build tools; the served dashboard is unchanged in behaviour.
 
+- Add `onetree install --gc-mode opportunistic` for macOS repositories in
+  privacy-protected folders. Cleanup then runs, at most hourly, from eligible
+  attended `onetree new` and `onetree launch` commands instead of launchd, so
+  it inherits the interactive host's folder access. Runs are bounded, locked,
+  resumable, host-attributed, and never fail the requested command (#61).
+- GC now retains the checkout configured as `onetree.source`, and all mutating
+  GC commands share one crash-recoverable machine lock.
+
 ## 1.3.0 (2026-11-19)
 
 - `onetree gc --all` reports inaccessible registrations, records scan

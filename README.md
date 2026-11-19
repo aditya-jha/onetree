@@ -104,6 +104,11 @@ unregistered: see [Production checkouts](docs/reference.md#production-checkouts)
   PR, commits after the merged head, a changed gitignored file you listed in
   `keep`, or that another tool made. Every removal is logged;
   `onetree rm --force` is the only way to discard work.
+  On macOS, `onetree install --gc-mode opportunistic` moves that hourly check
+  into eligible attended `onetree new` and `onetree launch` commands. This is
+  useful when launchd cannot read repositories in privacy-protected folders;
+  it runs at most once an hour, with a 20-second cooperative budget, and a GC
+  failure never fails the command you asked for.
 
 ## What it looks like
 
@@ -133,8 +138,10 @@ $ onetree events -n 4
 | dsh | `~/.dsh` exists | `~/.dsh/onetree-plugin.mjs`, loaded from `~/.dsh/cordis.patch.yml` | the same plugin | `~/.dsh/AGENTS.md` | none |
 
 Every install also writes the shell wrappers (`~/.onetree-agents.sh`, sourced
-from `~/.zshrc`, and from `~/.bashrc` when it exists) and the hourly
-`onetree gc --all` (launchd on macOS, cron on Linux). The rules block sits
+from `~/.zshrc`, and from `~/.bashrc` when it exists). By default it installs
+hourly `onetree gc --all` (launchd on macOS, cron on Linux); install with
+`--gc-mode opportunistic` to run cleanup from attended onetree commands instead.
+The rules block sits
 between `<!-- onetree:start -->` and `<!-- onetree:end -->`; your own text in
 those files is kept.
 

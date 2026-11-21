@@ -1523,7 +1523,10 @@ eq "onetree rm: a detached checkout with a commit on no remote, or a change, is 
 # ==== part 6
 # ---- ui: argument and requirement checks (the server itself is covered by ui/server.test.ts)
 s1=0; o1=$($ONETREE ui --bogus 2>&1) || s1=$?
-s2=0; o2=$(PATH=/usr/bin:/bin $ONETREE ui --no-open 2>&1) || s2=$?
+# the system's tools without node: a Linux /usr/bin/node would start a server that never exits. One ln per folder:
+# where /bin links to /usr/bin each name comes twice, and uutils ln refuses a name twice in one call
+NONODE=$TMP/no-node-bin; mkdir -p "$NONODE"; ln -sf /bin/* "$NONODE"; ln -sf /usr/bin/* "$NONODE"; rm -f "$NONODE/node"
+s2=0; o2=$(PATH=$NONODE $ONETREE ui --no-open 2>&1) || s2=$?
 eq "ui rejects an unknown option, and refuses without node 22+" "$s1 $(grep -c '^onetree: ui: unknown option --bogus$' <<<"$o1") $s2 $(grep -cE '^onetree: ui: node 22\+ is required' <<<"$o2")" "1 1 1 1"
 
 # ==== part 7

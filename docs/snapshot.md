@@ -166,12 +166,13 @@ A worktree row from `gc --json` or a snapshot adds `gc`; a main row adds `park`.
 
 | `park.action` | `park.code` | Meaning |
 |---|---|---|
-| `none` | `unguarded` | unguarded repos are never parked |
+| `none` | `unguarded` | unguarded and not following: not registered, `onetree.follow` false, or on another branch |
 | `none` | `on-integration` | already on the integration branch |
 | `leave` | `dirty` | uncommitted changes in the main checkout |
 | `leave` | `not-merged` | the branch it sits on has not merged |
 | `leave` | `diverged` | on the integration branch with commits the remote lacks, so it cannot fast-forward; the reason gives the count |
 | `leave` | `blocked` | git refused the switch or fast-forward, for example because it would overwrite an ignored file; the reason names the files |
+| `would-park` | `behind` | dry run: an unguarded main on the integration branch that gc would fast-forward |
 | `would-park` | `candidate` | dry run: clean, on another branch (merge state is checked only when parking for real) |
 | `parked` | `merged` | switched back to the integration branch |
 | `fast-forwarded` | `updated` | was on the integration branch and pulled new commits |

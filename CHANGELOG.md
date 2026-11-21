@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- gc keeps an unguarded main checkout current: a registered one that sits clean
+  on its integration branch is fast-forwarded like a guarded mirror, never
+  switched; `git config onetree.follow false` opts out. `onetree new` and
+  `onetree bootstrap` warn when main is behind, since settings, copied files
+  and the bootstrap hook come from it. Park's fast-forward now passes
+  `--no-squash`, so a `mergeOptions` setting cannot stage commits instead (#66).
+
 - `onetree install` notes, when the Claude desktop app is present, to turn on
   "Auto-archive sessions when their pull request closes". Without it every
   worktree gc removes leaves the app's sidebar a group for a missing folder.

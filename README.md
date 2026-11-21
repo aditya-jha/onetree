@@ -69,7 +69,7 @@ Other ways to onboard (pick one instead of the `init` above):
 ```
 onetree init --guard --integration develop   # PRs target develop, not the remote's default branch
 onetree init --guard --carry fix-login       # main has uncommitted work: move it to a worktree first
-onetree init --no-guard                      # register for cleanup only; keep working in main directly
+onetree init --no-guard                      # no lock; keep working in main directly (gc keeps it current on the integration branch)
 onetree init --file                          # write the settings to a .onetree file to commit, for every clone
 ```
 

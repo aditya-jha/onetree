@@ -47,6 +47,7 @@ when run from a git clone that is not at a release tag.
 | `keep` | none | gitignored files gc must not lose: a worktree holding one that differs from `keepSource` is kept |
 | `keepSource` | the main checkout | the directory holding the current copy of the `keep` files |
 | `bootstrap` | none | a shell command run inside a new worktree, after the built-in dependency install, with `ONETREE_MAIN` and `ONETREE_PATH` set |
+| `follow` | `true` | gc fast-forwards an unguarded main that sits clean on the integration branch; `false` leaves it alone |
 | `stale` | `24` | hours before gc may remove a clean worktree with no merged PR: one whose closed PR has every commit pushed, or one with nothing beyond the integration branch |
 | `writable` | none | gitignored local state by name: repo-relative paths, `d/` for a directory. A missing entry is created when the mirror is locked; with `lockIgnored`, only these stay writable |
 | `lockIgnored` | `false` | lock gitignored paths in a guarded mirror too, except what `writable` lists |
@@ -302,6 +303,15 @@ a fast-forward that would overwrite one (code `blocked`). `park` never overwrite
 file in the main checkout: when switching to the integration branch, or
 fast-forwarding it, would replace one with a file that branch now tracks, park
 leaves main where it is and names the file (code `blocked`).
+
+An unguarded main is never switched or parked, but it follows its integration
+branch: when it is registered, on that branch, behind the fetched remote ref and
+free of changes to tracked files, gc and `park` fast-forward it the same way
+(codes `updated`, `dirty`, `blocked`, `diverged`; a dry run says `would-park`
+`behind`). On any other branch, or with `git config onetree.follow false`, it
+is left alone (code `unguarded`). `onetree new` and `onetree bootstrap` print
+one line when main is behind its integration branch, because settings, copied
+files and the `bootstrap` hook (`ONETREE_MAIN`) come from main.
 
 ## Dependencies in a guarded mirror
 

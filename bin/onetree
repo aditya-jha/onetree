@@ -1500,7 +1500,11 @@ included() {  # main -> NUL-separated: the gitignored files its .worktreeinclude
   git -C "$1" ls-files -z --others --ignored --exclude-from=.worktreeinclude | git -C "$1" check-ignore -z --stdin || true
 }
 bootstrap() {  # main path — copy the gitignored bits a fresh checkout lacks, install deps, run the project's own hook
-  local main=$1 path=$2 f pm inst custom out
+  local main=$1 path=$2 f pm inst custom out behind
+  # settings, copied files and the bootstrap hook come from main: say when it lags, from the ref already fetched
+  remotes_resolve "$main"
+  behind=$(git -C "$main" rev-list --count "HEAD..refs/remotes/$RB/$(integration "$main")" 2>/dev/null) && [[ $behind -gt 0 ]] &&
+    printf 'onetree: %s is %s commit(s) behind %s/%s; settings, copied files and onetree.bootstrap (ONETREE_MAIN) come from there\n' "$main" "$behind" "$RB" "$(integration "$main")" >&2
   local -a fs; read -ra fs <<<"$(copy_list "$main")"
   for f in ${fs[@]+"${fs[@]}"}; do [[ -e "$main/$f" && ! -e "$path/$f" ]] && cp -Rp "$main/$f" "$path/$f"; done
   while IFS= read -r -d '' f; do
@@ -1998,6 +2002,8 @@ _park_body() {  # main — git mutations; caller holds the unlock window when gu
   local main=$1 repo int branch pr prhead head merged=0 ghmerged=0 before after
   repo=$(basename "$main"); int=$(integration "$main"); remotes_resolve "$main"
   branch=$(git -C "$main" symbolic-ref -q --short HEAD || echo "(detached)")
+  # switched away since park_one looked: an unguarded main is never switched
+  if [[ "$branch" != "$int" ]] && ! guarded "$main"; then park_out "$main" none unguarded "not guarded, on $branch, left alone"; return 0; fi
   # on the integration branch untracked files may stay: a fast-forward that would overwrite one is refused by git
   local uno=(); [[ "$branch" == "$int" ]] && uno=(-uno)
   if [[ "${2:-0}" == 1 ]]; then
@@ -2010,7 +2016,11 @@ _park_body() {  # main — git mutations; caller holds the unlock window when gu
   if [[ "$branch" == "$int" ]]; then
     git -C "$main" fetch -q "$RB" 2>/dev/null || true
     before=$(git -C "$main" rev-parse HEAD); after=$before; local err=""
-    if [[ -z "$(git -C "$main" status --porcelain -uno)" ]] && err=$(git -C "$main" merge -q --ff-only --no-overwrite-ignore "$RB/$int" 2>&1); then after=$(git -C "$main" rev-parse HEAD)
+    # rechecked after the fetch: a branch switched to meanwhile is not the one to move. --no-squash: a user's
+    # branch.<int>.mergeOptions would otherwise stage the commits and leave HEAD where it was
+    if [[ "$(git -C "$main" symbolic-ref -q --short HEAD)" != "$int" ]]; then
+      park_out "$main" leave blocked "switched away from $int during the update, leaving it"; return 1
+    elif [[ -z "$(git -C "$main" status --porcelain -uno)" ]] && err=$(git -C "$main" merge -q --ff-only --no-squash --no-autostash --no-overwrite-ignore "$RB/$int" 2>&1); then after=$(git -C "$main" rev-parse HEAD)
     # an ignored file of the user's is where the update puts a tracked one: keep the user's
     elif [[ "$err" == *"would be overwritten"* ]]; then
       park_out "$main" leave blocked "fast-forwarding $int $(git_refusal "$err")"; return 1
@@ -2046,14 +2056,25 @@ park_one() {
   local main=$1 dry=${2:-0} repo int branch
   repo=$(basename "$main"); int=$(integration "$main")
   branch=$(git -C "$main" symbolic-ref -q --short HEAD || echo "(detached)")
+  # unguarded: follow the integration branch only when it sits there, registered, and something came in
+  if ! guarded "$main"; then
+    local why="" behind=0
+    if ! is_registered "$main"; then why="not registered"
+    elif [[ "$(cfg follow "$main" true)" != true ]]; then why="onetree.follow is false"
+    elif [[ "$branch" != "$int" ]]; then why="on $branch"; fi
+    [[ -z "$why" ]] || { park_out "$main" none unguarded "not guarded, $why, left alone"; return 0; }
+    remotes_resolve "$main"; behind=$(git -C "$main" rev-list --count "HEAD..refs/remotes/$RB/$int" 2>/dev/null || echo 0)
+    # a current main someone is editing is never reported dirty
+    [[ $behind -gt 0 ]] || { park_out "$main" none on-integration "on $int"; return 0; }
+    [[ $dry == 1 ]] && { park_out "$main" would-park behind "fast-forward $int by $behind commit(s) from $RB/$int"; return 0; }
+    _park_body "$main" 0; return $?
+  fi
   if [[ $dry == 1 ]]; then
-    guarded "$main" || { park_out "$main" none unguarded "not guarded, never parked"; return 0; }
     [[ "$branch" == "$int" ]] && { park_out "$main" none on-integration "on $int"; return 0; }
     [[ -z "$(git -C "$main" status --porcelain)" ]] || { park_out "$main" leave dirty "on $branch with uncommitted changes, leaving it"; return 1; }
     park_out "$main" would-park candidate "$branch -> $int"
     return 0
   fi
-  guarded "$main" || { park_out "$main" none unguarded "not guarded, never parked"; return 0; }
   local hs=0 st=0; half_switch_p "$main" && hs=1
   with_main_unlocked "$main" _park_body "$main" "$hs" || st=$?
   # a fast-forward may have moved the lockfile; git hooks run from here use this node_modules
@@ -2907,7 +2928,8 @@ own AGENTS.md or CLAUDE.md can add to these rules; it cannot relax them.
   binds the session to one worktree, and Claude Code then refuses any shell
   command it cannot prove stays inside it, in the session and its subagents.
   Unguarded repos are worked in directly unless the user asks for a
-  worktree.
+  worktree. gc fast-forwards an unguarded main that sits clean on its
+  integration branch (`onetree.follow false` turns that off).
 - **Inside a worktree:** it is yours alone; never touch other worktrees or the
   main checkout. If the branch is a placeholder (`…/claude-…`, `…/pi-…`,
   `…/codex-…`, `…/dsh-…`) rename it before the first push:

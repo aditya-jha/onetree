@@ -292,8 +292,8 @@ rm "$p/dirt"
 $ONETREE init --stale 0 "$MAIN" >/dev/null 2>&1
 json_is "gc: pushed, unmerged branch kept as not-merged" "$($ONETREE gc --dry-run --json "$MAIN")" '.[0].gc.code == "not-merged" and .[0].unpushed == 0'
 ( cd "$MAIN" && git merge -q --no-ff -m merge feature/feat-a && git push -q origin main )
-eq "golden: gc --dry-run --json of a single-remote clone matches the recorded rows (merged into integration: would remove; unguarded main: never parked)" "$($ONETREE gc --dry-run --json "$MAIN" | golden)" '{"path":"<TMP>/worktrees/main/feat-a","repo":"main","main":"<TMP>/main","kind":"worktree","slug":"feat-a","branch":"feature/feat-a","detached":false,"head":"<SHA>","dirty":0,"unpushed":0,"pr":{"state":"NONE","head":null},"lock":null,"gc":{"action":"would-remove","code":"in-integration","reason":"feature/feat-a, pr=NONE"}}
-{"path":"<TMP>/main","repo":"main","kind":"main","park":{"action":"none","code":"unguarded","reason":"not guarded, never parked"}}'
+eq "golden: gc --dry-run --json of a single-remote clone matches the recorded rows (merged into integration: would remove; unguarded main on its integration branch, current: nothing to do)" "$($ONETREE gc --dry-run --json "$MAIN" | golden)" '{"path":"<TMP>/worktrees/main/feat-a","repo":"main","main":"<TMP>/main","kind":"worktree","slug":"feat-a","branch":"feature/feat-a","detached":false,"head":"<SHA>","dirty":0,"unpushed":0,"pr":{"state":"NONE","head":null},"lock":null,"gc":{"action":"would-remove","code":"in-integration","reason":"feature/feat-a, pr=NONE"}}
+{"path":"<TMP>/main","repo":"main","kind":"main","park":{"action":"none","code":"on-integration","reason":"on main"}}'
 has "gc --dry-run (text) says would remove" "$($ONETREE gc --dry-run "$MAIN")" "^would remove $TMP/worktrees/main/feat-a \(feature/feat-a, pr=NONE\)\$"
 if [[ -f "$MAIN/.git/onetree-fetched" ]]; then ok "cache: gc stamps the main after fetching"; else bad "cache: gc stamps the main after fetching"; fi
 
@@ -340,6 +340,36 @@ eq "park: a guarded main on its integration branch with only an untracked folder
   "$(grep -cE '^fast-forwarded untr main to [0-9a-f]{7}$' <<<"$out") $(git -C "$UT" rev-list --count HEAD..origin/main) $(cat "$UT/.idea/ws")" "1 0 x"
 $ONETREE unregister "$UT" >/dev/null; chmod -R u+w "$UT"
 
+# ---- an unguarded main follows its integration branch (#66): only registered, clean and on that branch
+( cd "$MAIN" && git commit -q --allow-empty -m "for followers" && git push -q origin main )
+follow_case() {  # name setup -> "<park code> <commits still behind> <branch> <tracked changes>"
+  local d=$TMP/fol-$1; git clone -q origin.git "$d" 2>/dev/null; git -C "$d" reset -q --hard HEAD~1
+  [[ $1 == unregistered ]] || $ONETREE init --no-guard --root "$TMP/fol-worktrees" "$d" >/dev/null 2>&1
+  ( cd "$d" && eval "$2" ) >/dev/null 2>&1
+  local code; code=$(ONETREE_NO_EVENTS=1 $ONETREE gc --json "$d" 2>/dev/null | jq -r '.[] | select(.park) | .park.code')
+  printf '%s %s %s %s' "$code" "$(git -C "$d" rev-list --count HEAD..origin/main)" "$(git -C "$d" branch --show-current)" "$(git -C "$d" status --porcelain -uno | wc -l | tr -d ' ')"
+  [[ $1 == unregistered ]] || $ONETREE unregister "$d" >/dev/null 2>&1
+}
+eq "follow: an unguarded main is fast-forwarded only when registered, on its integration branch, clean and not opted out; never switched" \
+  "$(for c in "clean:" "squash:git config branch.main.mergeOptions --squash" "dirty:echo x >> README.md" \
+      "feature:git switch -q -c feature/done" "optout:git config onetree.follow false" "unregistered:"; do
+      printf '%s=%s\n' "${c%%:*}" "$(follow_case "${c%%:*}" "${c#*:}")"; done)" \
+  "clean=updated 0 main 0
+squash=updated 0 main 0
+dirty=dirty 1 main 1
+feature=unguarded 1 feature/done 0
+optout=unguarded 1 main 0
+unregistered=unguarded 1 main 0"
+FD=$TMP/fol-dry; git clone -q origin.git "$FD" 2>/dev/null; git -C "$FD" reset -q --hard HEAD~1
+$ONETREE init --no-guard --root "$TMP/fol-worktrees" "$FD" >/dev/null 2>&1
+git -C "$FD" config onetree.bootstrap true
+dry=$(ONETREE_NO_EVENTS=1 $ONETREE gc --dry-run --json "$FD" | jq -c '.[] | select(.park) | .park | [.action, .code]')
+nw=$(ONETREE_NO_EVENTS=1 $ONETREE new warned "$FD" 2>&1 >/dev/null) || true
+eq "follow: a dry run names the fast-forward without moving main; new warns that main is behind and still makes the worktree" \
+  "$dry $(git -C "$FD" rev-list --count HEAD..origin/main) $(grep -cF "onetree: $FD is 1 commit(s) behind origin/main; settings, copied files and onetree.bootstrap (ONETREE_MAIN) come from there" <<<"$nw") $([[ -d "$TMP/fol-worktrees/fol-dry/warned" ]] && echo made)" \
+  '["would-park","behind"] 1 1 made'
+$ONETREE unregister "$FD" >/dev/null 2>&1
+
 # ---- park never overwrites an ignored file that the integration branch now tracks: git would, by default
 git init -q --bare -b main ig.git; git clone -q ig.git igmain 2>/dev/null; IG=$TMP/igmain
 ( cd igmain && echo gen.json > .gitignore && echo a > a && git add . && git commit -qm init && git push -q origin main \
@@ -372,7 +402,7 @@ $ONETREE unregister "$IG" >/dev/null; chmod -R u+w "$IG"
 
 # ---- a real gc removes it: in the JSON, on disk, in the event log
 gc=$($ONETREE gc --json "$MAIN")
-eq "gc --json: removed, the directory and the merged local branch gone" "$(jq -c '[.[0].gc.action, .[0].gc.code, .[1].park.code]' <<<"$gc") $([[ -d "$p" ]] && echo dir || echo nodir) $(git -C "$MAIN" show-ref -q --verify refs/heads/feature/feat-a && echo branch || echo nobranch)" '["remove","in-integration","unguarded"] nodir nobranch'
+eq "gc --json: removed, the directory and the merged local branch gone" "$(jq -c '[.[0].gc.action, .[0].gc.code, .[1].park.code]' <<<"$gc") $([[ -d "$p" ]] && echo dir || echo nodir) $(git -C "$MAIN" show-ref -q --verify refs/heads/feature/feat-a && echo branch || echo nobranch)" '["remove","in-integration","on-integration"] nodir nobranch'
 json_is "events: the removal is recorded, and the gc run summarised" "$($ONETREE events --json)" '(map(select(.kind == "gc")) | length == 1 and (.[0] | .action == "remove" and .code == "in-integration" and .path == "'"$p"'" and .branch == "feature/feat-a" and .cmd == "gc"))
   and (map(select(.kind == "gc-run")) | length == 1 and (.[0] | .removed == 1 and .kept == 0 and .parked == 0 and .fastForwarded == 0 and (.seconds | type) == "number" and .target == "'"$MAIN"'"))'
 eq "events: --since with -n, a future --since, and -n 0 for everything" "$($ONETREE events --json --since 1h -n 1 | jq -c 'map(.kind)') $($ONETREE events --json --since $(( $(date +%s) + 3600 )) | jq length) $($ONETREE events --json -n 0 | jq length)" '["gc-run"] 0 5'

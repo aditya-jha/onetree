@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- gc keeps an unguarded main checkout current: a registered one that sits clean
+  on its integration branch is fast-forwarded like a guarded mirror, never
+  switched; `git config onetree.follow false` opts out. `onetree new` and
+  `onetree bootstrap` warn when main is behind, since settings, copied files
+  and the bootstrap hook come from it. Park's fast-forward now passes
+  `--no-squash`, so a `mergeOptions` setting cannot stage commits instead (#66).
+
 - The dashboard is built with vite 8.3.8 and source-map-js 1.2.3, which clears
   the two high severity `npm audit` warnings shown during worktree bootstrap.
   Both are build tools; the served dashboard is unchanged in behaviour.

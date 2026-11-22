@@ -348,13 +348,14 @@ tool_caches() {
 # main [verbose] — after a lock: create each tool_caches file empty, opening its directory for the moment. tsc 5.9 and
 # eslint 10 both take
 cache_prepare() {
-  local m=$1 v=${2:-0} c d   # an empty cache file and rewrite it in place, which a locked directory allows
+  local m=$1 v=${2:-0} c d cs   # an empty cache file and rewrite it in place, which a locked directory allows
+  cs=$(tool_caches "$m")   # listed before any directory opens: tool_caches skips a writable one, so running it alongside the loop raced
   while IFS= read -r c; do
     [[ -n "$c" && ! -e "$m/$c" ]] || continue
     d=$(dirname "$m/$c")
     if chmod u+w "$d" 2>/dev/null; then { : > "$m/$c"; } 2>/dev/null || true; chmod a-w "$d" 2>/dev/null || true; fi
     [[ -e "$m/$c" && $v == 1 ]] && printf 'onetree: created %s empty: its tool cannot create it in a locked directory, but rewrites it in place\n' "$c" >&2
-  done < <(tool_caches "$m")
+  done <<<"$cs"
   return 0
 }
 # main -> one safe entry per line: relative, no . or .. component, outside .git, no glob characters; ./ and // squeezed

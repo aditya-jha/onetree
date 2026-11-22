@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `onetree init --guard` always creates `.eslintcache` and `.stylelintcache`
+  empty in a locked root. It listed them while it was creating the earlier
+  ones, so a cache next to tsc's build info was sometimes skipped and eslint
+  then failed with EACCES.
+
 - gc keeps an unguarded main checkout current: a registered one that sits clean
   on its integration branch is fast-forwarded like a guarded mirror, never
   switched; `git config onetree.follow false` opts out. `onetree new` and

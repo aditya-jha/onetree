@@ -997,11 +997,11 @@ $ONETREE init --no-guard "$WM" >/dev/null 2>&1
 mkdir -p "$HOME/.claude"   # Claude is installed: a guarded mirror keeps the Claude app's own worktree folder creatable
 git clone -q origin.git cw-main 2>/dev/null; CW=$TMP/cw-main
 $ONETREE init --guard --root "$TMP/cw-worktrees" "$CW" >/dev/null 2>&1
-( exec -a claude sleep 60 ) & HC=$!
-( exec -a "codex app-server --listen stdio://" sleep 60 ) & HX=$!
-( exec -a codex sleep 60 ) & HY=$!
-( exec -a pi sleep 60 ) & HP=$!
-( exec -a "node --import tsx/esm /src/deepseek-harness/apps/cli/src/bin.ts web" sleep 60 ) & HD=$!   # dsh run from its source checkout
+( exec -a claude sleep 3600 ) & HC=$!
+( exec -a "codex app-server --listen stdio://" sleep 3600 ) & HX=$!
+( exec -a codex sleep 3600 ) & HY=$!
+( exec -a pi sleep 3600 ) & HP=$!
+( exec -a "node --import tsx/esm /src/deepseek-harness/apps/cli/src/bin.ts web" sleep 3600 ) & HD=$!   # dsh run from its source checkout
 sleep 0.3
 hw=$($ONETREE new host-a "$CW" 2>/dev/null)
 wrong=""

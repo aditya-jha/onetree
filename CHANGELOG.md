@@ -9,10 +9,6 @@
   and the bootstrap hook come from it. Park's fast-forward now passes
   `--no-squash`, so a `mergeOptions` setting cannot stage commits instead (#66).
 
-- `onetree install` notes, when the Claude desktop app is present, to turn on
-  "Auto-archive sessions when their pull request closes". Without it every
-  worktree gc removes leaves the app's sidebar a group for a missing folder.
-
 - The dashboard is built with vite 8.3.8 and source-map-js 1.2.3, which clears
   the two high severity `npm audit` warnings shown during worktree bootstrap.
   Both are build tools; the served dashboard is unchanged in behaviour.

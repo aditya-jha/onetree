@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # onetree — a git worktree per agent task, a read-only main checkout, cleanup when the PR merges.
-#   For Claude Code, Codex, pi and dsh.  https://github.com/aditya-jha/onetree
+#   For Claude Code, Codex, pi, dsh and GitHub Copilot (VS Code, CLI).  https://github.com/aditya-jha/onetree
 #
 #   layout   <root>/<repo>/<slug>     root: ~/worktrees, or per repo (onetree.root)
 #   branch   <prefix><slug>           prefix: feature/ (onetree.branchPrefix), cut from <base>/<integration> after a fetch
@@ -65,7 +65,7 @@
 #   doctor [--json]            check all of that; rules: print the rules block; version: print the version
 #
 # Hooks and adapters (called by agents and wrappers, not by hand)
-#   guard                      PreToolUse (Claude, Codex) and tool_call (pi, dsh): refuse changes to a guarded main
+#   guard                      PreToolUse (Claude, Codex, Copilot) and tool_call (pi, dsh): refuse changes to a guarded main
 #   session                    SessionStart: record the session; one line of guidance where it matters
 #   hook-create | hook-remove  Claude Code WorktreeCreate / WorktreeRemove
 #   auto <agent>|--check | bound [--session S] [--pid P] | render pi|dsh
@@ -1133,8 +1133,9 @@ park_out() {
 }
 
 # ---- agents: which agent sessions are alive and where they sit (docs/snapshot.md)
-AGENT_JQ='(.agent // (.transcript_path // "" | if test("/\\.claude/") then "claude" elif test("/\\.codex/") then "codex" elif test("/\\.pi/") then "pi" elif test("/\\.dsh/") then "dsh" else "" end))'
-# hook json -> claude | codex | pi | dsh | unknown: what the payload says, else where its transcript lives
+AGENT_JQ='(.agent // (.transcript_path // "" | if test("/\\.claude/") then "claude" elif test("/\\.codex/") then "codex" elif test("/\\.pi/") then "pi" elif test("/\\.dsh/") then "dsh" elif (env.COPILOT_HOOK_DIR // "") != "" then "copilot" else "" end))'
+# hook json -> claude | codex | pi | dsh | copilot | unknown: what the payload says, else where its transcript lives,
+# else Copilot's hook environment (its payload names no transcript; the runtime sets COPILOT_HOOK_DIR for every hook)
 agent_from_payload() {
   local a; a=$(jq -r "$AGENT_JQ" <<<"$1" 2>/dev/null) || a=
   if [[ -n "$a" ]]; then echo "$a"; else echo unknown; fi
@@ -1182,7 +1183,7 @@ AGENT=
 # Codex Desktop thread is its cua-repl.mjs controller, not every cua_node helper
 agent_of() {
   local exe=$1 argv=$2 base=${1##*/} w1=${2%% *} c; w1=${w1##*/}; AGENT=
-  for c in "$base" "$w1"; do case "$c" in claude|claude-code) AGENT=claude; return 0 ;; codex) AGENT=codex; return 0 ;; pi) AGENT=pi; return 0 ;; dsh) AGENT=dsh; return 0 ;; esac; done
+  for c in "$base" "$w1"; do case "$c" in claude|claude-code) AGENT=claude; return 0 ;; codex) AGENT=codex; return 0 ;; pi) AGENT=pi; return 0 ;; dsh) AGENT=dsh; return 0 ;; copilot|copilot-runtime) AGENT=copilot; return 0 ;; esac; done
   # Claude Code's versioned binary
   [[ "$base" =~ ^[0-9]+(\.[0-9]+)+$ && "$exe" == *claude* ]] && { AGENT=claude; return 0; }
   # Codex Desktop: one controller per thread; node_repl / template-picker / server.mjs helpers are not sessions
@@ -1218,17 +1219,18 @@ host_of() {
   case "$AGENT" in
     claude) case "${CLAUDE_CODE_ENTRYPOINT:-}" in claude-desktop*) echo claude-app ;; claude-vscode*|*jetbrains*) echo claude-ide ;; sdk-*|mcp|*github-action*) echo claude-sdk ;; *) echo claude-cli ;; esac ;;
     codex) if [[ "$argv" == *" app-server"* ]]; then echo codex-app; else echo codex-cli; fi ;;
-    pi|dsh) echo "$AGENT" ;;
+    pi|dsh|copilot) echo "$AGENT" ;;
   esac
   return 0
 }
 SKEY_SESSION=; SKEY_PID=; SKEY_START=
 # host — how a later hook call finds this agent session again: its session id, and its pid with the pid's start time (a
-# reused pid is another process). The Codex app-server and dsh's web server serve many sessions: no pid
+# reused pid is another process). The Codex app-server, dsh's web server and VS Code's copilot-runtime serve many
+# sessions: no pid
 session_key() {
   SKEY_SESSION=; SKEY_PID=; SKEY_START=
   case "$1" in claude-*) SKEY_SESSION=${CLAUDE_CODE_SESSION_ID:-} ;; codex-*) SKEY_SESSION=${CODEX_THREAD_ID:-} ;; dsh) SKEY_SESSION=${ONETREE_SESSION_ID:-${DSH_SESSION_ID:-}} ;; ?*) SKEY_SESSION=${ONETREE_SESSION_ID:-} ;; esac
-  case "$1" in ""|codex-app|dsh) return 0 ;; esac
+  case "$1" in ""|codex-app|dsh|copilot) return 0 ;; esac
   SKEY_PID=${ONETREE_SESSION_PID:-$(agent_pid)}; [[ "$SKEY_PID" =~ ^[0-9]+$ ]] || { SKEY_PID=; return 0; }
   SKEY_START=$(ps -o lstart= -p "$SKEY_PID" 2>/dev/null | tr -s ' ' || true)
   return 0
@@ -1264,6 +1266,7 @@ move_hint() {
     claude-*) printf "prefix every command with \`cd %s &&\` and edit by absolute path. Do not call \`EnterWorktree\`: from then on Claude Code refuses any shell command it cannot prove stays inside that one worktree, in this session and in its subagents." "$q" ;;
     codex-cli) printf "prefix every command with \`cd %s &&\` (onetree's hook judges the command, never \`workdir\`) and give apply_patch absolute paths under it. To move this thread itself, ask the user to type \`/cd %s\`." "$q" "$p" ;;
     codex-app) printf "prefix every command with \`cd %s &&\` (onetree's hook judges the command, never \`workdir\`) and give apply_patch absolute paths under it. This thread's review pane stays on %s; to review the work in the app, ask the user to open a new thread on %s." "$q" "$m" "$p" ;;
+    copilot) printf "prefix every command with \`cd %s &&\` and give file tools absolute paths under it: this chat stays in the folder it started in." "$q" ;;
     pi) printf "nothing to do: onetree's pi extension runs this session's commands in %s from now on, and relative paths in read, write and edit resolve there." "$p" ;;
     # dsh-moved: the working directory the dsh plugin sent is inside the worktree (the plugin moved it there, or the
     # session was started there); dsh: it is not. The session's folder in the web UI never changes
@@ -2771,7 +2774,7 @@ cmd_snippet() {
   fi
   wr=$(wr_entries "$main" | tr '\n' ' '); wr=${wr% }
   cat <<EOS
-# Worktrees in $repo (binding for every agent: Claude, Codex, pi, dsh)
+# Worktrees in $repo (binding for every agent: Claude, Codex, pi, dsh, Copilot)
 
 $( [[ $g == 1 ]] && printf 'The main checkout `%s` is a read-only mirror: a hook blocks file edits, mutating git and chmod there, and its tracked files are filesystem `a-w` (`EACCES` on save; do not chmod).' "$main" || printf 'The main checkout is `%s`.' "$main" ) All task work happens in one worktree per task under
 \`$root/$repo/<slug>\`, created only by \`onetree\` (\`onetree info\` prints these rules).
@@ -2785,7 +2788,7 @@ $( [[ $g == 1 ]] && printf 'The main checkout `%s` is a read-only mirror: a hook
   the path (main conversation only; the app's panes then follow). dsh: its sandbox cannot run \`onetree new\`; call
   the \`onetree_new\` tool instead, then pass the path as \`workdir\` to every bash call and give file tools absolute
   paths under it, not \`cd\` (the plugin opens the worktree a call names as its \`workdir\` in the sandbox; one
-  reached by \`cd\` inside a command it never sees). Everywhere else (Claude CLI or IDE, Codex, pi): prefix every command with
+  reached by \`cd\` inside a command it never sees). Everywhere else (Claude CLI or IDE, Codex, pi, Copilot): prefix every command with
   \`cd <path> &&\` and edit by absolute path. State the path in your first reply.
   Never \`git checkout\`, \`switch\`, \`stash\`, \`reset\` or \`merge\` in the main checkout, never \`git worktree add\` by
   hand, never \`EnterWorktree\` (Claude Code then refuses shell commands it cannot prove stay in that one worktree).
@@ -2817,9 +2820,16 @@ session_noninteractive() {
 }
 # ---- session: the SessionStart hook, and the rules block each agent's instructions carry
 # SessionStart hook: records the session; quiets non-interactive onboarding, never registered-repo safety guidance
+# Copilot takes a SessionStart hook's output only as JSON, its additionalContext; the others take the text as it is
 cmd_session() {
-  local j="" main r t reg=no
+  local j="" out
   [[ -t 0 ]] || j=$(cat 2>/dev/null || true)
+  [[ "$(agent_from_payload "$j")" == copilot ]] || session_text "$j"
+  out=$(session_text "$j"); [[ -z "$out" ]] || jq -n --arg c "$out" '{additionalContext: $c}'
+  exit 0
+}
+session_text() {
+  local j=$1 main r t reg=no
   [[ -z "$j" ]] || record_session "$j"
   main=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || { session_noninteractive || true; exit 0; }; main=$(real "$(dirname "$main")")
   while IFS= read -r r; do [[ -n "$r" ]] || continue; [[ "$(real "$r")" == "$main" ]] && reg=yes; done < <(repos_all)
@@ -2867,7 +2877,7 @@ cmd_session() {
 BIN=$HOME/.local/bin/onetree; PLIST=$HOME/Library/LaunchAgents/com.onetree.gc.plist; WRAPPERS=$HOME/.onetree-agents.sh
 START='<!-- onetree:start (managed by `onetree install`; edits inside are overwritten) -->'; END='<!-- onetree:end -->'
 cmd_rules() { cat <<'EOS'
-# Worktrees (binding for every agent: Claude, Codex, pi, dsh)
+# Worktrees (binding for every agent: Claude, Codex, pi, dsh, Copilot)
 
 The worktree protocol below applies only inside a repo where `onetree info` says
 `registered yes`. Outside a repo, or where it says `registered no`, onetree
@@ -2918,7 +2928,7 @@ own AGENTS.md or CLAUDE.md can add to these rules; it cannot relax them.
   pass the path as `workdir` to every bash call and give file tools absolute
   paths under it, not `cd` (the plugin opens the worktree a call names as
   its `workdir` in the sandbox, never one reached by `cd`).
-  Everywhere else (the Claude CLI or IDE, Codex, pi): prefix every command with
+  Everywhere else (the Claude CLI or IDE, Codex, pi, Copilot): prefix every command with
   `cd <worktree> &&` (the shell
   returns to the start folder between commands, and Codex's hook judges the
   command, never `workdir`) and edit by absolute path. In the Codex CLI the
@@ -3433,6 +3443,16 @@ write_dsh_plugin() {
     printf '%s\n- insert:\n    - id: onetree\n      name: %s\n%s\n' "$YSTART" "'$HOME/.dsh/onetree-plugin.mjs'" "$YEND"; } | cat -s > "$tmp"
   mv "$tmp" "$f"
 }
+# Copilot's runtime (VS Code's agent host and the Copilot CLI) reads every *.json in ~/.copilot/hooks: this file is
+# onetree's alone. The Claude-named events send Claude's payload (tool_name, tool_input, session_id, cwd) with
+# Copilot's argument names (path, command)
+COPILOT_HOOKS=$HOME/.copilot/hooks/onetree.json
+write_copilot_hooks() {
+  mkdir -p "$(dirname "$COPILOT_HOOKS")"
+  jq -n --arg bin "$BIN" '{version: 1, hooks: {
+    PreToolUse: [{type: "command", command: ($bin + " guard"), timeoutSec: 20}],
+    SessionStart: [{type: "command", command: ($bin + " session"), timeoutSec: 10}]}}' > "$COPILOT_HOOKS"
+}
 HOOK_RE='/onetree (guard|hook-create|hook-remove|session)$'   # a hook command onetree installed
 # Codex keys each hook's trust by its position (codex_trust), so a reinstall keeps onetree's group where it is and
 # writes only on a change. onetree owns handlers, not groups: a group of only onetree's handlers is its own, and in a
@@ -3546,6 +3566,7 @@ cmd_install() {
   [[ -d "$HOME/.pi/agent" ]] && { write_block "$HOME/.pi/agent/AGENTS.md"; echo "rules: ~/.pi/agent/AGENTS.md"; write_pi_extension; echo "pi: ~/.pi/agent/extensions/onetree.ts (tool_call + session)"; }
   [[ -d "$HOME/.dsh" ]] && { write_block "$HOME/.dsh/AGENTS.md"; echo "rules: ~/.dsh/AGENTS.md (dsh loads this as user-global instructions)"; }
   [[ -d "$HOME/.dsh" ]] && { write_dsh_plugin; echo "dsh: ~/.dsh/onetree-plugin.mjs, loaded by ~/.dsh/cordis.patch.yml (guard + session)"; }
+  [[ -d "$HOME/.copilot" ]] && { write_copilot_hooks; echo "hooks: $COPILOT_HOOKS (PreToolUse, SessionStart; Copilot in VS Code and the Copilot CLI)"; write_block "$HOME/.copilot/copilot-instructions.md"; echo "rules: ~/.copilot/copilot-instructions.md"; }
   render_wrappers > "$WRAPPERS"; rm -f "$HOME/.onetree-agents.zsh"   # the file's earlier name
   for f in "$HOME/.zshrc" "$HOME/.bashrc"; do
     [[ "$f" == "$HOME/.zshrc" || -f "$f" ]] || continue
@@ -3565,8 +3586,8 @@ cmd_uninstall() {
   while IFS= read -r m; do [[ -n "$m" ]] || continue; guarded "$m" && unlock_main "$m" || true; done < <(repos_all)
   uninstall_gc_job
   hook_json "$HOME/.claude/settings.json" remove; [[ -f "$HOME/.codex/hooks.json" ]] && hook_json "$HOME/.codex/hooks.json" remove
-  strip_block "$HOME/.claude/CLAUDE.md"; strip_block "$HOME/.codex/AGENTS.md"; strip_block "$HOME/.pi/agent/AGENTS.md"; strip_block "$HOME/.dsh/AGENTS.md"
-  rm -f "$HOME/.pi/agent/extensions/onetree.ts" "$HOME/.dsh/onetree-plugin.mjs"
+  strip_block "$HOME/.claude/CLAUDE.md"; strip_block "$HOME/.codex/AGENTS.md"; strip_block "$HOME/.pi/agent/AGENTS.md"; strip_block "$HOME/.dsh/AGENTS.md"; strip_block "$HOME/.copilot/copilot-instructions.md"
+  rm -f "$HOME/.pi/agent/extensions/onetree.ts" "$HOME/.dsh/onetree-plugin.mjs" "$COPILOT_HOOKS"
   if [[ -f "$HOME/.dsh/cordis.patch.yml" ]]; then tmp=$(mktemp); awk -v s="$YSTART" -v e="$YEND" '$0==s{skip=1} !skip{print} $0==e{skip=0}' "$HOME/.dsh/cordis.patch.yml" | cat -s > "$tmp"; cat "$tmp" > "$HOME/.dsh/cordis.patch.yml"; rm -f "$tmp"; fi
   rm -f "$WRAPPERS" "$HOME/.onetree-agents.zsh"
   for f in "$HOME/.zshrc" "$HOME/.bashrc"; do [[ -f "$f" ]] && { tmp=$(mktemp); grep -vE 'onetree-agents\.z?sh' "$f" > "$tmp"; cat "$tmp" > "$f"; rm -f "$tmp"; }; done
@@ -3629,6 +3650,8 @@ cmd_doctor() {
   [[ -d "$HOME/.pi/agent" ]] && chk "rules block in ~/.pi/agent/AGENTS.md" "grep -qF '$START' $HOME/.pi/agent/AGENTS.md"
   [[ -d "$HOME/.pi/agent" ]] && chk "pi extension calls $BIN" "grep -qF '$BIN' $HOME/.pi/agent/extensions/onetree.ts"
   [[ -d "$HOME/.dsh" ]] && chk "rules block in ~/.dsh/AGENTS.md" "grep -qF '$START' $HOME/.dsh/AGENTS.md"
+  [[ -d "$HOME/.copilot" ]] && chk "Copilot hooks point at $BIN" "grep -q '$BIN guard' $COPILOT_HOOKS && grep -q '$BIN session' $COPILOT_HOOKS"
+  [[ -d "$HOME/.copilot" ]] && chk "rules block in ~/.copilot/copilot-instructions.md" "grep -qF '$START' $HOME/.copilot/copilot-instructions.md"
   [[ -d "$HOME/.dsh" ]] && chk "dsh plugin calls $BIN and ~/.dsh/cordis.patch.yml loads it" "grep -qF '$BIN' $HOME/.dsh/onetree-plugin.mjs && grep -qF '$YSTART' $HOME/.dsh/cordis.patch.yml"
   chk "shell wrappers sourced" "grep -q onetree-agents.sh $HOME/.zshrc"
   chk "shell wrappers fail closed" "grep -q 'refusing to start' $HOME/.onetree-agents.sh"
@@ -4454,6 +4477,11 @@ _patch_simple() {
   return 0
 }
 norm() { local p=$1; p=${p//\"/}; p=${p//\'/}; p=$(tilde "$p"); [[ "$p" == /* ]] || p="$2/$p"; printf '%s' "$p"; }
+# message on stdin -> stderr, where Claude, Codex, pi and dsh read a refusal; Copilot also takes it from its deny JSON
+refuse() {
+  local m; m=$(cat); printf '%s\n' "$m" >&2
+  [[ "${agent:-}" != copilot ]] || jq -cn --arg m "$m" '{permissionDecision: "deny", permissionDecisionReason: $m}'
+}
 # path main [rule] — refuse (exit 2 + stderr), and record the refusal with the agent, session, pid and command from
 # cmd_guard's scope
 block() {
@@ -4467,7 +4495,7 @@ block() {
   local h own where   # each step may fail without ending the guard early: any exit but 2 lets the call through
   # Claude sets agent_id only on a subagent's calls
   h=$(host_of) || h=; [[ -n "${aid:-}" && "$h" == claude-* ]] && h=claude-subagent
-  case "${agent:-}" in pi|dsh) h=$agent ;; esac   # its extension or plugin says who is asking: no guess from the process
+  case "${agent:-}" in pi|dsh|copilot) h=$agent ;; esac   # its extension, plugin or hook environment says who is asking: no guess from the process
   if [[ -f "$2/.git" ]]; then   # a worktree another agent session owns (foreign_tree_of), not a guarded main
     local m b; m=$(git -C "$2" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) && m=$(real "$(dirname "$m")") || m=$2
     r=$(basename "$m"); b=$(git -C "$2" symbolic-ref -q --short HEAD 2>/dev/null || echo "(detached)")
@@ -4476,7 +4504,7 @@ block() {
     else where="For a task of your own: $(new_step "$h" "<slug>" "$r"), then $(move_hint "$h" "<path>" "$m")"; fi
     local at="$1 is in $2"; [[ "$1" == "$2" ]] && at=$2   # a command run in the worktree itself names its folder
     printf 'onetree guard (%s): %s, the worktree another agent session works in (branch %s). Reading is fine; a change here would land in that session'"'"'s branch. %s Only if this session continues that session'"'"'s own work (a fork or side chat of it): %s makes the worktree yours too, then retry.\n' \
-      "${3:-a write}" "$at" "$b" "$where" "$(new_step "$h" "$(basename "$2")" "$r")" >&2
+      "${3:-a write}" "$at" "$b" "$where" "$(new_step "$h" "$(basename "$2")" "$r")" | refuse
     exit 2
   fi
   # dsh's plugin sends the session's working directory as cwd: inside a worktree of this checkout, the session works there
@@ -4484,7 +4512,7 @@ block() {
   if [[ -n "$own" ]]; then h=dsh-moved; else own=$(bound_worktrees "${sid:-}" "$([[ "$apid" == null ]] || echo "$apid")" "$2" | awk 'NR == 1') || own=; fi
   if [[ -n "$own" ]]; then where="This session already has a worktree, $own: do it there. To work there, $(move_hint "$h" "$own" "$2")"
   else where="Work in a worktree instead: $(new_step "$h" "<slug>" "$r"), then $(move_hint "$h" "<path>" "$2")"; fi
-  printf 'onetree guard (%s): %s is the read-only main checkout of %s. %s Never switch, stash, reset, edit, or run scripts, servers or tests in the main checkout; reading is fine.%s\n' "${3:-a write}" "$1" "$r" "$where" "$note" >&2
+  printf 'onetree guard (%s): %s is the read-only main checkout of %s. %s Never switch, stash, reset, edit, or run scripts, servers or tests in the main checkout; reading is fine.%s\n' "${3:-a write}" "$1" "$r" "$where" "$note" | refuse
   exit 2
 }
 # path rule — refuse a command that would turn the guard off or change onetree's settings, wherever the agent runs it.
@@ -4497,7 +4525,7 @@ block_self() {
   else what="onetree for every repo on this machine"; fi
   apid=${ONETREE_SESSION_PID:-$(agent_pid)}; [[ "$apid" =~ ^[0-9]+$ ]] || apid=null
   log_event guard decision=block "rule=$2" "tool=${tool:-}" "agent=${agent:-unknown}" "session=${sid:-}" "pid:=$apid" "cwd=${cwd:-}" "path=$1" "main=$m" "repo=$r" "command=${cmd:-}" "file=${fp:-}"
-  printf "onetree guard (%s): an agent may not turn the guard off or change onetree's settings; this would change %s. If the user wants it, they run the command themselves in a terminal. Do not look for another way to do it.\n" "$2" "$what" >&2
+  printf "onetree guard (%s): an agent may not turn the guard off or change onetree's settings; this would change %s. If the user wants it, they run the command themselves in a terminal. Do not look for another way to do it.\n" "$2" "$what" | refuse
   exit 2
 }
 # hook json -> the patch, wherever the client put it in tool_input
@@ -4550,8 +4578,13 @@ cmd_guard() {
   local j tool cwd scwd fp cmd r p out why sid agent aid pd d tagged np k pt
   j=$(cat) || exit 0
   { IFS= read -r -d '' tool; IFS= read -r -d '' cwd; IFS= read -r -d '' sid; IFS= read -r -d '' agent; IFS= read -r -d '' cmd; IFS= read -r -d '' d; IFS= read -r -d '' aid; } \
-    < <(jq -j '[.tool_name, .cwd, .session_id, '"$AGENT_JQ"', (.tool_input.command // .tool_input.cmd), .tool_input.workdir, .agent_id] | map((. // "" | tostring) + "\u0000") | add' <<<"$j" 2>/dev/null) || true
-  [[ -n "$tool" ]] || exit 0   # one jq start per call, every field at once; bad JSON still passes
+    < <(jq -j '[.tool_name, .cwd, .session_id, '"$AGENT_JQ"', (.tool_input.command? // .tool_input.cmd? // null), (.tool_input.workdir? // null), .agent_id] | map((. // "" | tostring) + "\u0000") | add' <<<"$j" 2>/dev/null) || true
+  [[ -n "$tool" ]] || exit 0   # one jq start per call, every field at once; bad JSON still passes (a string tool_input is read)
+  # Copilot reports str_replace_editor and apply_patch as Edit: a view is a read, a patch is judged like apply_patch
+  if [[ "$tool" == Edit && "$agent" == copilot ]]; then
+    [[ "$cmd" == view ]] && exit 0
+    [[ "$(_patch_text "$j")" == *"*** Begin Patch"* ]] && tool=apply_patch
+  fi
   OWNERS_CHECK=1   # another agent session's worktree is read-only here, like a guarded main
   GUARDED_MEMO=$(gcfg_all onetree.guarded)
   [[ -n "$cwd" ]] || cwd=$PWD
@@ -4560,7 +4593,7 @@ cmd_guard() {
   [[ -n "$agent" ]] || agent=unknown
   case "$tool" in
     Edit|Write|MultiEdit|NotebookEdit)
-      fp=$(jq -r '.tool_input.file_path // .tool_input.notebook_path // empty' <<<"$j" 2>/dev/null) || exit 0; [[ -n "$fp" ]] || exit 0
+      fp=$(jq -r '.tool_input.file_path // .tool_input.path // .tool_input.notebook_path // empty' <<<"$j" 2>/dev/null) || exit 0; [[ -n "$fp" ]] || exit 0
       [[ "$fp" == /* ]] || fp="$cwd/$fp"
       _cfg_is "$cwd" "$fp" write && block_self "$(_cfg_real)" "$SELF_CFG: onetree's config file"
       r=$(_production_cfg_main "$cwd" "$fp") && block_self "$r" "$SELF_CFG: production marker"

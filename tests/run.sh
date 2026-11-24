@@ -2054,6 +2054,18 @@ ONETREE_SCHEDULED=1 $ONETREE gc --all >/dev/null
 eq "opportunistic gc: a stale scheduled process exits without overwriting health" \
   "$(cmp -s "$result" <(printf '%s\n' "$previous") && echo same)" same
 
+# ---- an agent's fixture repo registered inside a worktree goes out of the registry with that worktree
+host=$($ONETREE new fixture-host "$MAIN" 2>/dev/null); fixture=$host/scratch/fixture
+echo /scratch/ >> "$(git -C "$host" rev-parse --git-common-dir)/info/exclude"
+git clone -q origin.git "$fixture"; git config -f "$ONETREE_CONFIG" --add onetree.repo "$fixture"
+touch -t 200001010000 "$host/.git"
+rc=0; $ONETREE gc --all >/dev/null 2>"$gc_err" || rc=$?
+eq "gc --all: removing a worktree unregisters the repos inside it, and the run stays clean" \
+  "$rc $([[ -e $host ]] && echo kept) $(git config -f "$ONETREE_CONFIG" --get-all onetree.repo | grep -Fc "$fixture") $(grep -c 'cannot inspect' "$gc_err")" '0  0 0'
+git config -f "$ONETREE_CONFIG" --add onetree.repo "$TMP/gone/project"
+$ONETREE unregister "$TMP/gone/project" >/dev/null
+eq "unregister: drops a registered repo whose folder is gone" "$(git config -f "$ONETREE_CONFIG" --get-all onetree.repo | grep -Fc "$TMP/gone" || true)" 0
+
 # ==== end
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ $fail == 0 ]]

@@ -713,6 +713,11 @@ else is kept with code `foreign` and its maker named; that tool removes it. An
 explicit `onetree rm`, or Claude's WorktreeRemove hook
 (`onetree hook-remove`), still removes one.
 
+A repo registered inside a worktree (an agent's test fixture in a scratch
+folder, registered by a `new` run in it) goes out of the registry when gc or
+`rm` removes that worktree. `onetree unregister <path>` drops an entry whose
+folder is already gone.
+
 A session's host files it under the folder it last worked in, so after a move
 the main checkout's resume list no longer shows it, and once gc removes the
 worktree there is nowhere to resume. `onetree resume` lists the agent sessions

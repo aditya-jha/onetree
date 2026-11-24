@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- A repo registered inside a worktree, such as an agent's test fixture in a
+  scratch folder, stayed in the registry after gc removed that worktree, and
+  every later `gc --all` failed on it with `gc cannot inspect`. Removing a
+  worktree now unregisters the repos inside it, and `onetree unregister <path>`
+  drops an entry whose folder is already gone (it used to die with `no
+  registered repo named`).
+
 - GitHub Copilot in VS Code (and the Copilot CLI, which shares its runtime) is
   supported. When `~/.copilot` exists, `onetree install` writes
   `~/.copilot/hooks/onetree.json`, which runs the guard on PreToolUse and the

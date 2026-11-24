@@ -1982,6 +1982,10 @@ remove_one() {
     else git -C "$main" branch -q -d "$branch" 2>/dev/null || true; fi
   fi
   git -C "$main" worktree prune
+  # a repo registered inside it (a test fixture in a scratch folder) went with it
+  local r; while IFS= read -r r; do
+    [[ "$(tilde "$r")" == "$path"/* ]] && { registry_unset "$r"; printf 'onetree: unregistered %s: it was inside %s\n' "$(tilde "$r")" "$path" >&2; }
+  done < <(gcfg_all onetree.repo)
   # the PR head fetched for it
   [[ "$rev" =~ ^#([0-9]+)$ ]] && git -C "$main" update-ref -d "refs/onetree/pr/${BASH_REMATCH[1]}" 2>/dev/null || true
   gc_out remove "$how" "$label, pr=$pr"
@@ -2222,6 +2226,7 @@ gc_run() {
     repo_index=$((repo_index+1)); [[ $repo_index -le $cursor ]] && continue
     gc_deadline_reached && { incomplete=true; cursor=$((repo_index-1)); return 0; }
     if [[ "$target" == --all ]]; then
+      is_registered "$m" || continue   # unregistered by an earlier removal in this run: it was inside that worktree
       if ! paths=$(gc_worktrees "$m"); then
         accessible=$((accessible-1)); gc_scan_error "$m" 'worktree scan failed'; continue
       fi
@@ -2729,10 +2734,18 @@ ignore_root() {  # a worktree root inside a git checkout: .git/info/exclude when
   gi="$top/.gitignore"; [[ -s "$gi" && -n "$(tail -c1 "$gi")" ]] && echo >>"$gi"
   echo "/$rel/" >>"$gi"; echo "added /$rel/ to $gi (commit it)"
 }
+registry_unset() { git config -f "$CFG" --unset onetree.repo "^$(printf '%s' "$1" | sed 's/[.[\*^$]/\\&/g')\$"; }  # entry, as stored
 cmd_unregister() {
-  local main; main=$(main_of "${1:-}"); local r
+  local r
+  # a repo whose folder is gone cannot be resolved: drop the entry as written
+  if [[ -n "${1:-}" && ! -e "$(tilde "$1")" ]]; then
+    while IFS= read -r r; do
+      [[ "$(tilde "$r")" == "$(tilde "$1")" ]] && { registry_unset "$r"; refresh_guarded; echo "unregistered $(tilde "$1") (its folder is gone)"; return 0; }
+    done < <(gcfg_all onetree.repo)
+  fi
+  local main; main=$(main_of "${1:-}")
   if guarded "$main"; then unlock_main "$main" || true; git -C "$main" config --local onetree.guard false; CFG_DUMP_MAIN=; fi
-  while IFS= read -r r; do [[ -n "$r" ]] || continue; [[ "$(real "$(tilde "$r")")" == "$main" ]] && git config -f "$CFG" --unset onetree.repo "^$(printf '%s' "$r" | sed 's/[.[\*^$]/\\&/g')\$"; done < <(gcfg_all onetree.repo)
+  while IFS= read -r r; do [[ -n "$r" ]] || continue; [[ "$(real "$(tilde "$r")")" == "$main" ]] && registry_unset "$r"; done < <(gcfg_all onetree.repo)
   refresh_guarded; echo "unregistered $main (left onetree.guard=false in .git/config)"
 }
 cmd_repos() {

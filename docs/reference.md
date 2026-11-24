@@ -485,6 +485,21 @@ dsh's because the plugin says so, and a shell command is dsh's because dsh
 gives it `DSH_SESSION_ID`. That id also binds a worktree made by `onetree new`
 to the dsh session, so a later refusal names it.
 
+GitHub Copilot is bound by `~/.copilot/hooks/onetree.json`, which Copilot's
+runtime reads for VS Code's agent mode and the Copilot CLI alike (VS Code runs
+it as `copilot-runtime`). It uses the Claude-named events, `PreToolUse` and
+`SessionStart`, whose payload has Claude's fields and tool names (`Bash`,
+`Write`, `Edit`) but Copilot's argument names: the guard reads a file from
+`path` as well as `file_path`, passes an `Edit` that is a `str_replace_editor`
+view, and judges an `Edit` carrying a patch like `apply_patch`. The payload
+names no agent or transcript; a hook call is Copilot's when the runtime has set
+`COPILOT_HOOK_DIR`. A refusal goes to stderr with exit 2, like the others, and
+also to stdout as Copilot's `{"permissionDecision": "deny", …}`; the session
+notice is printed as `{"additionalContext": …}`, the only SessionStart output
+Copilot reads. One runtime serves every chat, so no pid ties a Copilot chat to
+the worktree it made, and a refusal names `onetree new` rather than that
+worktree.
+
 A dsh session made in the browser takes its folder from the web UI, so no
 shell wrapper stands in front of it. The plugin follows the session's working
 directory instead, which dsh stores in the session and restores on resume and
@@ -622,6 +637,7 @@ Claude shell is Codex), the host by its environment:
 | Codex CLI | `cd <path> &&` before every command (the hook sees the command, never `workdir`) and absolute `apply_patch` paths; the user can move the thread with `/cd <path>` |
 | Codex app | the same; the thread's review pane stays where it started, so a new thread on the path reviews the work |
 | pi | nothing: the extension runs the session's commands in the worktree from then on |
+| Copilot (VS Code, CLI) | `cd <path> &&` before every command and absolute paths for file tools: the chat stays in the folder it started in |
 | dsh | nothing when the session's working directory is in the worktree (the plugin moves a session announced in a guarded main checkout); otherwise `workdir` on every bash call and absolute paths for file tools, not `cd` (the plugin opens a call's `workdir` in the sandbox). A dsh session makes another worktree with the plugin's `onetree_new` tool, not `onetree new`. The web UI keeps the session under the mirror either way |
 
 `new` records which session made the worktree (`agent`, `host`, `session`,

@@ -240,7 +240,8 @@ Every event carries `ts` (UTC), `t` (epoch seconds, what `--since` compares),
 
 `agent` is the payload's own `agent` field (the pi extension and the dsh
 plugin set it), else `claude`, `codex`, `pi` or `dsh` from where the hook
-payload's transcript lives, else `unknown`. `session` is the
+payload's transcript lives, else `copilot` when Copilot's runtime ran the hook
+(`COPILOT_HOOK_DIR` is set), else `unknown`. `session` is the
 hook payload's `session_id` when present. Allowed calls are not recorded.
 
 ```
@@ -279,10 +280,12 @@ shell, so Claude, Codex and pi are found whether they run the hook through
 `sh -c` or directly; `ONETREE_SESSION_PID` overrides the walk. Files of dead
 processes are pruned on every `onetree agents`. The same pid is recorded on
 `guard` events, which is how a block is tied to a session.
+Every Copilot chat runs under one `copilot-runtime` process, so its record
+holds the chat that started last.
 
 ```
 {
-  "pid": 54738, "agent": "claude",          claude | codex | pi | dsh | unknown
+  "pid": 54738, "agent": "claude",          claude | codex | pi | dsh | copilot | unknown
   "session": "9f2c…",                       the hook's session_id, null when nothing was recorded
   "command": "…/claude --output-format …",  argv, first 200 characters
   "exe": "claude", "cwd": "/Users/you/worktrees/shop/checkout-retry",

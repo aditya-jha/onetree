@@ -177,6 +177,24 @@ st=0; printf '{"tool_name":"Bash","cwd":"%s","tool_input":{"command":"npm test"}
 eq "guard blocks npm test, and ONETREE_NO_EVENTS keeps the block out of the log (doctor probes use it)" "$st $($ONETREE events --json --kind guard | jq length)" "2 1"
 printf '{"tool_name":"Edit","cwd":"%s","tool_input":{"file_path":"README.md"},"agent":"pi"}' "$MAIN" | $ONETREE guard 2>/dev/null || true
 json_is "events: an Edit block names the file and the agent the payload declared" "$($ONETREE events --json --kind guard)" '(length == 2) and (.[1] | .tool == "Edit" and .agent == "pi" and .rule == "a write" and .file == "'"$MAIN"'/README.md" and .command == "")'
+# Copilot (VS Code's agent host, the Copilot CLI): Claude's tool names with Copilot's argument names; COPILOT_HOOK_DIR says who asks
+cop_wrong=""
+for row in 'block Write {"path":"new.txt","file_text":"x"}' 'block Edit {"path":"README.md","old_str":"hi","new_str":"ho"}' 'block Edit {"path":"README.md","old_str":"hi","new_str":"*** Begin Patch\n*** Update File: /elsewhere/x\n*** End Patch"}' \
+  'allow Edit {"command":"view","path":"README.md"}' 'block Edit "*** Begin Patch\n*** Update File: README.md\n@@\n-hi\n+ho\n*** End Patch"' \
+  'block Bash {"command":"git stash","description":"x"}' 'allow Bash {"command":"git status","description":"x"}' 'allow Read {"path":"README.md"}'; do
+  v=${row%% *}; r=${row#* }; t=${r%% *}; in=${r#* }
+  st=0; jq -nc --arg cwd "$MAIN" --arg t "$t" --argjson in "$in" '{hook_event_name: "PreToolUse", session_id: "s-cop", cwd: $cwd, tool_name: $t, tool_input: $in}' |
+    COPILOT_HOOK_DIR=$HOME/.copilot/hooks ONETREE_NO_EVENTS=1 $ONETREE guard >/dev/null 2>&1 || st=$?
+  case $st in 0) got=allow ;; 2) got=block ;; *) got="exit $st" ;; esac
+  [[ "$got" == "$v" ]] || cop_wrong+=" want $v, got $got: $t $in;"
+done
+eq "copilot: the guard reads Copilot's write, edit, patch and bash calls (path, a string patch; an edit's own text is no patch); a view or read passes" "$cop_wrong" ""
+cop_out=$(jq -nc --arg cwd "$MAIN" '{session_id: "s-cop", cwd: $cwd, tool_name: "Bash", tool_input: {command: "git stash"}}' | COPILOT_HOOK_DIR=$HOME/.copilot/hooks ONETREE_HOST=copilot ONETREE_NO_EVENTS=1 $ONETREE guard 2>/dev/null || true)
+json_is "copilot: a refusal is also Copilot's deny JSON on stdout" "$cop_out" '.permissionDecision == "deny" and (.permissionDecisionReason | test("read-only main checkout.*cd <path> &&"))'
+cop_ctx=$(cd "$MAIN" && jq -nc --arg cwd "$MAIN" '{hook_event_name: "SessionStart", session_id: "s-cop", cwd: $cwd, source: "new"}' | COPILOT_HOOK_DIR=$HOME/.copilot/hooks ONETREE_HOST=copilot ONETREE_SESSION_PID=424240 $ONETREE session)
+json_is "copilot: the session hint arrives as additionalContext JSON (Copilot's only SessionStart output), and the session is recorded as agent copilot" \
+  "$(jq -c --slurpfile r "$TMP/state/sessions/424240.json" '. + {rec: $r[0]}' <<<"$cop_ctx")" \
+  '(.additionalContext | test("guarded read-only mirror.*cd <path> &&")) and .rec.agent == "copilot" and .rec.session == "s-cop"'
 has "session mode: non-interactive sessions still receive a registered guarded checkout's safety notice" \
   "$(cd "$MAIN" && printf '{"session_id":"guarded-job","transcript_path":"/x/.claude/t.jsonl","cwd":"%s"}' "$MAIN" | CLAUDE_CODE_SESSION_ATTENDED=0 ONETREE_SESSION_PID=424239 $ONETREE session)" \
   'is a guarded read-only mirror.*onetree new'
@@ -986,6 +1004,11 @@ st=0; jq -nc --arg cwd "$WM" '{tool_name:"Edit",cwd:$cwd,tool_input:{file_path:"
 eq "lockIgnored: ignored paths are locked too and only listed ones stay writable; the guard and info agree" \
   "$(modes node_modules node_modules/pkg2/i.js .husky/_ .env src/x.log .claude/standup)$st $($ONETREE info "$WM" | grep -cE '^writable +\.claude/standup/ tmp/ \(onetree\.lockIgnored: listed paths only\)$')" \
   "node_modules:ro node_modules/pkg2/i.js:ro .husky/_:ro .env:ro src/x.log:ro .claude/standup:w 2 1"
+$ONETREE init --writable-remove ".claude/standup/ tmp/" "$WM" >/dev/null 2>&1
+st=0; err=$(jq -nc --arg cwd "$WM" '{tool_name:"Edit",cwd:$cwd,tool_input:{file_path:"README.md"}}' | ONETREE_NO_EVENTS=1 $ONETREE guard 2>&1 >/dev/null) || st=$?
+eq "lockIgnored with nothing writable: the guard still refuses with its message (exit 2), and the session notice still prints" \
+  "$st $(grep -c 'read-only main checkout' <<<"$err") $(cd "$WM" && $ONETREE session </dev/null | grep -c 'guarded read-only mirror')" "2 1 1"
+$ONETREE init --writable-add ".claude/standup/ tmp/" "$WM" >/dev/null 2>&1
 $ONETREE init --no-lock-ignored "$WM" >/dev/null 2>&1
 eq "lockIgnored off: the lock of the ignored set is undone" "$(modes node_modules node_modules/pkg2/i.js .husky/_ .env src/x.log README.md)" \
   "node_modules:w node_modules/pkg2/i.js:w .husky/_:w .env:w src/x.log:w README.md:ro "
@@ -1560,7 +1583,7 @@ eq "install: onetree's Codex guard keeps its place among the user's hooks, a rei
   "[\"/opt/a.sh\",\"$HOME/.local/bin/onetree guard\",\"/opt/b.sh\"] same-file 1"
 json_is "install: onetree owns handlers, not groups: the user's handler sharing onetree's group stays, an MCP hook (no command) stays, and onetree's own group is added" "$(jq -c .hooks.SessionStart "$HOME/.codex/hooks.json")" \
   '. == [{hooks: [{type: "command", command: "/opt/my-audit"}]}, {hooks: [{type: "mcp_tool", server: "s", tool: "t"}]}, {hooks: [{type: "command", command: "'"$HOME"'/.local/bin/onetree session", timeout: 10}]}]'
-mkdir -p "$HOME/.dsh"; printf -- '- id: webserver\n  config: {}\n' > "$HOME/.dsh/cordis.patch.yml"
+mkdir -p "$HOME/.dsh" "$HOME/.copilot"; printf -- '- id: webserver\n  config: {}\n' > "$HOME/.dsh/cordis.patch.yml"
 PATH="$WRAP_INSTALL_BIN:$PATH" $ONETREE install >/dev/null; PATH="$WRAP_INSTALL_BIN:$PATH" $ONETREE install >/dev/null
 eq "install (Linux): one hourly gc job in the crontab, however often install runs" "$(grep -c 'onetree gc --all' "$HOME/fake-crontab")" 1
 out=$(CI=1 PATH="$WRAP_INSTALL_BIN:$PATH" $ONETREE install --gc-mode opportunistic)
@@ -1572,6 +1595,9 @@ eq "install (Linux): switching back to scheduled restores exactly one job" \
 eq "install: dsh gets onetree's plugin and one managed insert row, the user's own rows kept, however often install runs" \
   "$(grep -c 'id: onetree' "$HOME/.dsh/cordis.patch.yml") $(grep -c 'id: webserver' "$HOME/.dsh/cordis.patch.yml") $(grep -cF "name: '$HOME/.dsh/onetree-plugin.mjs'" "$HOME/.dsh/cordis.patch.yml") $(grep -cF "\"$HOME/.local/bin/onetree\"" "$HOME/.dsh/onetree-plugin.mjs")" "1 1 1 1"
 rm -rf "$HOME/.dsh"
+json_is "install: Copilot gets its own hook file (guard on PreToolUse, session on SessionStart) and the rules in ~/.copilot/copilot-instructions.md" \
+  "$(jq -c --arg r "$(grep -c 'onetree:start' "$HOME/.copilot/copilot-instructions.md")" '. + {rules: $r}' "$HOME/.copilot/hooks/onetree.json")" \
+  '.version == 1 and .hooks.PreToolUse == [{type: "command", command: "'"$HOME"'/.local/bin/onetree guard", timeoutSec: 20}] and .hooks.SessionStart == [{type: "command", command: "'"$HOME"'/.local/bin/onetree session", timeoutSec: 10}] and .rules == "1"'
 drift() { doctor_json | jq -c '[.checks[] | select(.name | test("^installed onetree is the one in|^shell wrappers are what this onetree writes|^claude has this onetree.s rules")) | .ok]'; }
 d1=$(drift)
 cp "$HOME/.onetree-agents.sh" "$TMP/wrappers.bak"; echo '# edited' >> "$HOME/.onetree-agents.sh"
@@ -1722,6 +1748,8 @@ json_is "wrapper: what Claude Code's shell snapshot keeps of it still works in a
   '.a.argv == ["-p","snap"] and .a.cwd == "'"$WRAP_MAIN"'" and .b.argv == ["snap"] and (.b.cwd | startswith("'"$TMP"'/wrapper-worktrees/wrapper-main/pi-"))'
 PATH="$WRAP_INSTALL_BIN:$PATH" $ONETREE uninstall >/dev/null 2>&1 || true
 eq "uninstall (Linux): the gc job leaves the crontab" "$(grep -c 'onetree gc --all' "$HOME/fake-crontab" || true)" 0
+eq "uninstall: Copilot's hook file goes and its rules block is stripped" "$([[ -e "$HOME/.copilot/hooks/onetree.json" ]] && echo kept) $(grep -c 'onetree:start' "$HOME/.copilot/copilot-instructions.md" || true)" " 0"
+rm -rf "$HOME/.copilot"
 json_is "uninstall: takes out only onetree's handlers, leaving the user's, in order, and the MCP hook" "$(jq -c .hooks "$HOME/.codex/hooks.json")" \
   '.PreToolUse == [{matcher: "Bash", hooks: [{type: "command", command: "/opt/a.sh"}]}, {matcher: "Bash", hooks: [{type: "command", command: "/opt/b.sh"}]}] and .SessionStart == [{hooks: [{type: "command", command: "/opt/my-audit"}]}, {hooks: [{type: "mcp_tool", server: "s", tool: "t"}]}]'
 else

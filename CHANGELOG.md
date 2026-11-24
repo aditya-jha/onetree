@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- GitHub Copilot in VS Code (and the Copilot CLI, which shares its runtime) is
+  supported. When `~/.copilot` exists, `onetree install` writes
+  `~/.copilot/hooks/onetree.json`, which runs the guard on PreToolUse and the
+  session notice on SessionStart, and puts the rules block in
+  `~/.copilot/copilot-instructions.md`; `uninstall` removes both and `doctor`
+  checks them. The guard reads Copilot's argument names (`path`, a patch sent
+  as `Edit`) and answers with Copilot's deny JSON.
+
+- In a mirror with `onetree.lockIgnored` and no writable entries, the guard
+  ended with exit 1 and no message, which Claude treats as a non-blocking error
+  (the read-only files still refused the write), and the session notice was
+  missing. It refuses with exit 2 again and the notice prints.
+
 - `onetree init --guard` always creates `.eslintcache` and `.stylelintcache`
   empty in a locked root. It listed them while it was creating the earlier
   ones, so a cache next to tsc's build info was sometimes skipped and eslint

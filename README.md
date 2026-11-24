@@ -4,8 +4,9 @@ onetree gives every coding-agent task its own git worktree, refuses agents'
 changes to your main checkout, and removes each worktree once its pull request
 merges. It is for developers who run
 [Claude Code](https://github.com/anthropics/claude-code),
-[Codex](https://github.com/openai/codex), [pi](https://pi.dev/) or
-[dsh](https://deepseek.com/en/harness/) on GitHub repositories, often several
+[Codex](https://github.com/openai/codex), [pi](https://pi.dev/),
+[dsh](https://deepseek.com/en/harness/) or GitHub Copilot (VS Code's agent
+mode, the Copilot CLI) on GitHub repositories, often several
 at once; unlike a worktree manager, it is enforced by hooks, so the agents
 can't forget it.
 
@@ -136,6 +137,7 @@ $ onetree events -n 4
 | Codex | `~/.codex` exists | PreToolUse hook in `~/.codex/hooks.json` | SessionStart hook | `~/.codex/AGENTS.md` | `/hooks` in Codex, again after an update changes them |
 | pi | `~/.pi/agent` exists | `~/.pi/agent/extensions/onetree.ts` | the same extension | `~/.pi/agent/AGENTS.md` | none |
 | dsh | `~/.dsh` exists | `~/.dsh/onetree-plugin.mjs`, loaded from `~/.dsh/cordis.patch.yml` | the same plugin | `~/.dsh/AGENTS.md` | none |
+| GitHub Copilot (VS Code, CLI) | `~/.copilot` exists | PreToolUse hook in `~/.copilot/hooks/onetree.json` | SessionStart hook in the same file | `~/.copilot/copilot-instructions.md` | none; a chat started before install picks the hooks up in a new chat |
 
 Every install also writes the shell wrappers (`~/.onetree-agents.sh`, sourced
 from `~/.zshrc`, and from `~/.bashrc` when it exists). By default it installs

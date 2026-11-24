@@ -2848,7 +2848,7 @@ session_text() {
       "$t" "$b" "$(new_step "$h" "<slug>" "$(basename "$main")")" "$(move_hint "$h" "<path>" "$main")" "$(new_step "$h" "$(basename "$t")")"
   elif r=$(guarded_main_of_path "$PWD"); then
     local wr note; wr=$(wr_entries "$r" 2>/dev/null | tr '\n' ' ' || true); wr=${wr% }
-    if lock_ignored "$r"; then note=$([[ -n "$wr" ]] && printf ' Local state that belongs to this checkout stays writable here, without a worktree: %s (a file entry takes in-place writes only).' "$wr")
+    if lock_ignored "$r"; then note=$([[ -z "$wr" ]] || printf ' Local state that belongs to this checkout stays writable here, without a worktree: %s (a file entry takes in-place writes only).' "$wr")
     else note=' Gitignored local state (dependencies, caches, .env, agent settings) stays writable here, without a worktree; an ignored file in a locked directory takes in-place writes only.'; fi
     # the pi extension and the dsh plugin say who is asking (the guard reads the same field): `pnpm dsh web` is a node
     # process with no dsh in its name. dsh's plugin asks from the folder the session was created in and sends the
@@ -3451,7 +3451,7 @@ write_copilot_hooks() {
   mkdir -p "$(dirname "$COPILOT_HOOKS")"
   jq -n --arg bin "$BIN" '{version: 1, hooks: {
     PreToolUse: [{type: "command", command: ($bin + " guard"), timeoutSec: 20}],
-    SessionStart: [{type: "command", command: ($bin + " session"), timeoutSec: 10}]}}' > "$COPILOT_HOOKS"
+    SessionStart: [{type: "command", command: ($bin + " session"), timeoutSec: 10}]}}' > "$COPILOT_HOOKS.$$" && mv "$COPILOT_HOOKS.$$" "$COPILOT_HOOKS"   # never half a file: the runtime reads it at every chat
 }
 HOOK_RE='/onetree (guard|hook-create|hook-remove|session)$'   # a hook command onetree installed
 # Codex keys each hook's trust by its position (codex_trust), so a reinstall keeps onetree's group where it is and
@@ -4489,7 +4489,7 @@ block() {
   log_event guard decision=block "rule=${3:-a write}" "tool=${tool:-}" "agent=${agent:-unknown}" "session=${sid:-}" "pid:=$apid" "cwd=${cwd:-}" "path=$1" "main=$2" "repo=$r" "command=${cmd:-}" "file=${fp:-}"
   if lock_ignored "$2" 2>/dev/null; then
     wr=$(wr_entries "$2" 2>/dev/null | tr '\n' ' ' || true); wr=${wr% }
-    note=$([[ -n "$wr" ]] && printf ' Only gitignored local state stays writable here: %s.' "$wr")
+    note=$([[ -z "$wr" ]] || printf ' Only gitignored local state stays writable here: %s.' "$wr")
   else note=' Gitignored local state (dependencies, caches, .env, local settings) stays writable here; tracked files, and new files git would track, do not.'; fi
   [[ "${3:-}" == "$NEWFILE_RULE" ]] && note+=" git ignores ${1#"$2"/}, but its directory is locked, so nothing can create it here; if it is local state this checkout needs, \`onetree init --writable-add ${1#"$2"/}\` creates it once."
   local h own where   # each step may fail without ending the guard early: any exit but 2 lets the call through
@@ -4580,10 +4580,11 @@ cmd_guard() {
   { IFS= read -r -d '' tool; IFS= read -r -d '' cwd; IFS= read -r -d '' sid; IFS= read -r -d '' agent; IFS= read -r -d '' cmd; IFS= read -r -d '' d; IFS= read -r -d '' aid; } \
     < <(jq -j '[.tool_name, .cwd, .session_id, '"$AGENT_JQ"', (.tool_input.command? // .tool_input.cmd? // null), (.tool_input.workdir? // null), .agent_id] | map((. // "" | tostring) + "\u0000") | add' <<<"$j" 2>/dev/null) || true
   [[ -n "$tool" ]] || exit 0   # one jq start per call, every field at once; bad JSON still passes (a string tool_input is read)
-  # Copilot reports str_replace_editor and apply_patch as Edit: a view is a read, a patch is judged like apply_patch
+  # Copilot reports str_replace_editor and apply_patch as Edit: a view is a read; an Edit that names no file but
+  # carries a patch is judged like apply_patch (one that names a file is judged by it, whatever its text says)
   if [[ "$tool" == Edit && "$agent" == copilot ]]; then
     [[ "$cmd" == view ]] && exit 0
-    [[ "$(_patch_text "$j")" == *"*** Begin Patch"* ]] && tool=apply_patch
+    if [[ -z "$(jq -r '.tool_input.file_path? // .tool_input.path? // empty' <<<"$j" 2>/dev/null)" && "$(_patch_text "$j")" == *"*** Begin Patch"* ]]; then tool=apply_patch; fi
   fi
   OWNERS_CHECK=1   # another agent session's worktree is read-only here, like a guarded main
   GUARDED_MEMO=$(gcfg_all onetree.guarded)

@@ -179,15 +179,16 @@ printf '{"tool_name":"Edit","cwd":"%s","tool_input":{"file_path":"README.md"},"a
 json_is "events: an Edit block names the file and the agent the payload declared" "$($ONETREE events --json --kind guard)" '(length == 2) and (.[1] | .tool == "Edit" and .agent == "pi" and .rule == "a write" and .file == "'"$MAIN"'/README.md" and .command == "")'
 # Copilot (VS Code's agent host, the Copilot CLI): Claude's tool names with Copilot's argument names; COPILOT_HOOK_DIR says who asks
 cop_wrong=""
-for row in 'block Write {"path":"new.txt","file_text":"x"}' 'block Edit {"path":"README.md","old_str":"hi","new_str":"ho"}' \
+for row in 'block Write {"path":"new.txt","file_text":"x"}' 'block Edit {"path":"README.md","old_str":"hi","new_str":"ho"}' 'block Edit {"path":"README.md","old_str":"hi","new_str":"*** Begin Patch\n*** Update File: /elsewhere/x\n*** End Patch"}' \
   'allow Edit {"command":"view","path":"README.md"}' 'block Edit "*** Begin Patch\n*** Update File: README.md\n@@\n-hi\n+ho\n*** End Patch"' \
   'block Bash {"command":"git stash","description":"x"}' 'allow Bash {"command":"git status","description":"x"}' 'allow Read {"path":"README.md"}'; do
   v=${row%% *}; r=${row#* }; t=${r%% *}; in=${r#* }
-  got=allow; jq -nc --arg cwd "$MAIN" --arg t "$t" --argjson in "$in" '{hook_event_name: "PreToolUse", session_id: "s-cop", cwd: $cwd, tool_name: $t, tool_input: $in}' |
-    COPILOT_HOOK_DIR=$HOME/.copilot/hooks ONETREE_NO_EVENTS=1 $ONETREE guard >/dev/null 2>&1 || got=block
+  st=0; jq -nc --arg cwd "$MAIN" --arg t "$t" --argjson in "$in" '{hook_event_name: "PreToolUse", session_id: "s-cop", cwd: $cwd, tool_name: $t, tool_input: $in}' |
+    COPILOT_HOOK_DIR=$HOME/.copilot/hooks ONETREE_NO_EVENTS=1 $ONETREE guard >/dev/null 2>&1 || st=$?
+  case $st in 0) got=allow ;; 2) got=block ;; *) got="exit $st" ;; esac
   [[ "$got" == "$v" ]] || cop_wrong+=" want $v, got $got: $t $in;"
 done
-eq "copilot: the guard reads Copilot's write, edit, patch and bash calls (path, a string patch); a view or read passes" "$cop_wrong" ""
+eq "copilot: the guard reads Copilot's write, edit, patch and bash calls (path, a string patch; an edit's own text is no patch); a view or read passes" "$cop_wrong" ""
 cop_out=$(jq -nc --arg cwd "$MAIN" '{session_id: "s-cop", cwd: $cwd, tool_name: "Bash", tool_input: {command: "git stash"}}' | COPILOT_HOOK_DIR=$HOME/.copilot/hooks ONETREE_HOST=copilot ONETREE_NO_EVENTS=1 $ONETREE guard 2>/dev/null || true)
 json_is "copilot: a refusal is also Copilot's deny JSON on stdout" "$cop_out" '.permissionDecision == "deny" and (.permissionDecisionReason | test("read-only main checkout.*cd <path> &&"))'
 cop_ctx=$(cd "$MAIN" && jq -nc --arg cwd "$MAIN" '{hook_event_name: "SessionStart", session_id: "s-cop", cwd: $cwd, source: "new"}' | COPILOT_HOOK_DIR=$HOME/.copilot/hooks ONETREE_HOST=copilot ONETREE_SESSION_PID=424240 $ONETREE session)
@@ -1003,6 +1004,11 @@ st=0; jq -nc --arg cwd "$WM" '{tool_name:"Edit",cwd:$cwd,tool_input:{file_path:"
 eq "lockIgnored: ignored paths are locked too and only listed ones stay writable; the guard and info agree" \
   "$(modes node_modules node_modules/pkg2/i.js .husky/_ .env src/x.log .claude/standup)$st $($ONETREE info "$WM" | grep -cE '^writable +\.claude/standup/ tmp/ \(onetree\.lockIgnored: listed paths only\)$')" \
   "node_modules:ro node_modules/pkg2/i.js:ro .husky/_:ro .env:ro src/x.log:ro .claude/standup:w 2 1"
+$ONETREE init --writable-remove ".claude/standup/ tmp/" "$WM" >/dev/null 2>&1
+st=0; err=$(jq -nc --arg cwd "$WM" '{tool_name:"Edit",cwd:$cwd,tool_input:{file_path:"README.md"}}' | ONETREE_NO_EVENTS=1 $ONETREE guard 2>&1 >/dev/null) || st=$?
+eq "lockIgnored with nothing writable: the guard still refuses with its message (exit 2), and the session notice still prints" \
+  "$st $(grep -c 'read-only main checkout' <<<"$err") $(cd "$WM" && $ONETREE session </dev/null | grep -c 'guarded read-only mirror')" "2 1 1"
+$ONETREE init --writable-add ".claude/standup/ tmp/" "$WM" >/dev/null 2>&1
 $ONETREE init --no-lock-ignored "$WM" >/dev/null 2>&1
 eq "lockIgnored off: the lock of the ignored set is undone" "$(modes node_modules node_modules/pkg2/i.js .husky/_ .env src/x.log README.md)" \
   "node_modules:w node_modules/pkg2/i.js:w .husky/_:w .env:w src/x.log:w README.md:ro "

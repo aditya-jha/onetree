@@ -1737,6 +1737,24 @@ WRAP_SHELL=bash wrapper_run "$WRAP_MAIN" 0 '' pi interactive
 bash_pi=$(wrapper_json)
 json_is "wrapper: bash sources the same file; print mode passes through as typed and an interactive agent is relocated" "$(jq -nc --argjson a "$bash_print" --argjson b "$bash_pi" '{a:$a,b:$b}')" \
   '.a.argv == ["-p","from bash"] and .a.cwd == "'"$WRAP_MAIN"'" and .a.stdin == "bash stdin" and .a.status == 5 and .b.argv == ["interactive"] and (.b.cwd | startswith("'"$TMP"'/wrapper-worktrees/wrapper-main/pi-"))'
+alias_runs=""
+for sh in zsh bash; do   # the user's alias, defined before the file is sourced as in ~/.zshrc, adds its option and still reaches the wrapper.
+  # zsh parses a -c script whole, so the call is eval'd to be read after the alias exists; launch adds --add-dir options first
+  rm -f "$TMP/wrapper-log.argv" "$TMP/wrapper-log.cwd"
+  WRAP_LOG=$TMP/wrapper-log "$sh" -c '[ -z "${BASH_VERSION:-}" ] || shopt -s expand_aliases
+alias codex="codex --search"
+source "$HOME/.onetree-agents.sh"
+cd "$1"
+eval "codex interactive"' "$sh" "$WRAP_MAIN" </dev/null >/dev/null 2>&1 || true
+  alias_runs+="$sh:$(jq -c '.[-2:]' "$TMP/wrapper-log.argv" 2>/dev/null):$([[ "$(cat "$TMP/wrapper-log.cwd" 2>/dev/null)" == "$TMP/wrapper-worktrees/wrapper-main/codex-"* ]] && echo worktree || echo here) "
+done
+eq "wrapper: an alias named after an agent does not break the file; the alias's options reach the wrapper, which relocates the agent (zsh, bash)" \
+  "$alias_runs" 'zsh:["--search","interactive"]:worktree bash:["--search","interactive"]:worktree '
+alias_load() { doctor_json | jq -c '[.checks[] | select(.name == "shell wrappers load when an alias names an agent") | .ok]'; }
+l1=$(alias_load); cp "$HOME/.onetree-agents.sh" "$TMP/agents.bak"
+sed 's/^function codex {/codex() {/' "$TMP/agents.bak" > "$HOME/.onetree-agents.sh"   # the form an alias broke
+l2=$(alias_load); cp "$TMP/agents.bak" "$HOME/.onetree-agents.sh"
+eq "doctor: the wrappers load when an alias names an agent, and a file with the old codex() { form fails the check" "$l1 $l2" "[true] [false]"
 for sh in zsh bash; do   # what Claude Code's shell snapshot carries into an agent's shell: the functions, minus names starting with one underscore, and no variables
   "$sh" -c 'source "$HOME/.onetree-agents.sh"; { if [ -n "${ZSH_VERSION:-}" ]; then typeset +f; else declare -F | cut -d" " -f3; fi; } | grep -vE "^_[^_]" | while read -r f; do typeset -f "$f"; done' > "$TMP/snapshot.$sh"
 done

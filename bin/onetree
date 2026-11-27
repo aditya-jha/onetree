@@ -2463,18 +2463,20 @@ onetree_codex_passthrough() {
 }
 # the file every shell sources: sh that bash and zsh both read. Claude Code snapshots an agent's shell functions, not
 # its variables, and leaves out any function whose name starts with one underscore, so each name here starts with a
-# letter and
+# letter and the path to onetree is written into the bodies. The agents' wrappers use the `function` keyword because
+# zsh, and an interactive bash, expand an alias at `codex()`: a user's `alias codex='codex --search'` sourced earlier
+# made the file a parse error. After `function` the name is not expanded, and the alias then calls the wrapper.
 render_wrappers() {
   local t
-  t=$(cat <<'EOS'   # the path to onetree is written into the bodies
+  t=$(cat <<'EOS'
 onetree_launch() {
   if [ ! -x "@ONETREE@" ]; then printf 'onetree: %s missing; refusing to start %s\n' "@ONETREE@" "$1" >&2; return 1; fi
   "@ONETREE@" launch "$@"
 }
-claude() { if onetree_claude_passthrough "$@"; then command claude "$@"; else onetree_launch claude "$@"; fi; }
-codex() { if onetree_codex_passthrough "$@"; then command codex "$@"; else onetree_launch codex "$@"; fi; }
-pi() { onetree_launch pi "$@"; }
-dsh() { onetree_launch dsh "$@"; }
+function claude { if onetree_claude_passthrough "$@"; then command claude "$@"; else onetree_launch claude "$@"; fi; }
+function codex { if onetree_codex_passthrough "$@"; then command codex "$@"; else onetree_launch codex "$@"; fi; }
+function pi { onetree_launch pi "$@"; }
+function dsh { onetree_launch dsh "$@"; }
 EOS
 )
   printf '%s\n' '# Agents started in a guarded main checkout land in a fresh worktree (`onetree launch`). Sourced from ~/.zshrc and ~/.bashrc.' \
@@ -3669,7 +3671,10 @@ cmd_doctor() {
   chk "shell wrappers sourced" "grep -q onetree-agents.sh $HOME/.zshrc"
   chk "shell wrappers fail closed" "grep -q 'refusing to start' $HOME/.onetree-agents.sh"
   chk "shell wrappers pin $BIN" "grep -qF '$BIN' $HOME/.onetree-agents.sh"
-  chk "shell wrappers cover dsh" "grep -q 'dsh()' $HOME/.onetree-agents.sh"
+  # an alias named after an agent, sourced before the file, is what used to break it. zsh -f reads none of the user's config,
+  # so the dashboard's cached doctor never runs ~/.zshrc
+  command -v zsh >/dev/null && chk "shell wrappers load when an alias names an agent" \
+    "zsh -fc 'alias claude=: codex=: pi=: dsh=:; source \"\$1\" && [ \"\$(declare -f claude codex pi dsh | grep -c onetree_launch)\" -ge 4 ]' _ '$WRAPPERS' </dev/null >/dev/null 2>&1"
   # what install wrote, against what this onetree and its source would write now
   local src f; src=$(gcfg onetree.source || true)
   [[ -n "$src" && -f "$src/bin/onetree" ]] && chk "installed onetree is the one in $src (if not: onetree update)" "cmp -s '$BIN' '$src/bin/onetree'"

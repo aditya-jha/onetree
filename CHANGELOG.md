@@ -79,6 +79,13 @@
   program is now judged as awk: `print > file`, a `|` pipe and `system()` are
   refused in a guarded checkout.
 
+- The shell wrappers load when `~/.zshrc` defines an alias named after an
+  agent before sourcing them, such as `alias codex='codex --search'`. zsh
+  expanded the alias inside `codex() {`, so the file stopped with a parse
+  error and `codex`, `pi` and `dsh` started without onetree. The alias now
+  calls the wrapper with its options. `onetree doctor` checks that the file
+  loads when an alias names an agent, in place of its check for `dsh()`.
+
 ## 1.2.0 (2026-11-18)
 
 - `onetree park` (and so `gc` and `update`) fast-forwards a guarded main on its
